@@ -1,19 +1,63 @@
-# Git
+# --- VCS ---
 .git
 .gitignore
 .gitmodules
-
-# Dependencies
-node_modules
-.venv
-
-# CI/CD
+.gitattributes
 .github
+.mailmap
 
-# Environment files
+# --- IDE / editor / local plans ---
+.idea
+.vscode
+.cursor
+.claude
+.plans
+
+# --- Python caches ---
+__pycache__
+**/__pycache__
+*.py[cod]
+*.egg-info
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+
+# --- Local virtualenvs / installed deps (rebuilt inside the image) ---
+.venv
+venv
+node_modules
+**/node_modules
+web/node_modules
+
+# --- Local Hermes state and worktrees (must not leak into /opt/data) ---
+data
+.tmp-hermes-home
+worktrees
+
+# --- Build-only / docs-site assets not needed at runtime ---
+tests
+website
+packaging
+benchmarks
+docs/superpowers
+RELEASE_*.md
+
+# --- Local secrets ---
 .env
+.envrc
 
+# --- Release tarballs and generated archives accidentally left in repo ---
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+
+# --- Markdown noise (release notes, contributor docs) ---
+# Keep docker/SOUL.md because docker/entrypoint*.sh copies it into /opt/data,
+# and skill docs because skills/ + optional-skills/ are loaded at runtime.
 *.md
-
-# Runtime data (bind-mounted at /opt/data; must not leak into build context)
-data/
+!docker/SOUL.md
+!skills/**/*.md
+!optional-skills/**/*.md

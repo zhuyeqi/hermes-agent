@@ -118,6 +118,8 @@ def _is_local_skill(skill_path: Path) -> bool:
         return False
 MAX_SKILL_CONTENT_CHARS = 100_000   # ~36k tokens at 2.75 chars/token
 MAX_SKILL_FILE_BYTES = 1_048_576    # 1 MiB per supporting file
+SKILL_FILE_MODE = 0o644
+SKILL_DIR_MODE = 0o755
 
 # Characters allowed in skill names (filesystem-safe, URL-friendly)
 VALID_NAME_RE = re.compile(r'^[a-z0-9][a-z0-9._-]*$')
@@ -287,6 +289,35 @@ def _resolve_skill_target(skill_dir: Path, file_path: str) -> Tuple[Optional[Pat
     return target, None
 
 
+def _chmod_add_bits(path: Path, mode_bits: int) -> None:
+    """Best-effort chmod that only adds readability/traversal bits."""
+    try:
+        current = path.stat().st_mode
+        os.chmod(path, current | mode_bits)
+    except OSError:
+        logger.debug("Could not adjust permissions for %s", path, exc_info=True)
+
+
+def _ensure_skill_dir_readable(path: Path) -> None:
+    """Make a skill path traversable for sibling containers sharing HERMES_HOME."""
+    try:
+        skills_root = SKILLS_DIR.resolve()
+        current = path.resolve()
+    except OSError:
+        _chmod_add_bits(path, SKILL_DIR_MODE)
+        return
+
+    while True:
+        _chmod_add_bits(current, SKILL_DIR_MODE)
+        if current == skills_root or current.parent == current:
+            break
+        try:
+            current.relative_to(skills_root)
+        except ValueError:
+            break
+        current = current.parent
+
+
 def _atomic_write_text(file_path: Path, content: str, encoding: str = "utf-8") -> None:
     """
     Atomically write text content to a file.
@@ -301,15 +332,22 @@ def _atomic_write_text(file_path: Path, content: str, encoding: str = "utf-8") -
         encoding: Text encoding (default: utf-8)
     """
     file_path.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_skill_dir_readable(file_path.parent)
     fd, temp_path = tempfile.mkstemp(
         dir=str(file_path.parent),
         prefix=f".{file_path.name}.tmp.",
         suffix="",
     )
     try:
+        if hasattr(os, "fchmod"):
+            try:
+                os.fchmod(fd, SKILL_FILE_MODE)
+            except OSError:
+                logger.debug("Could not adjust permissions for %s", temp_path, exc_info=True)
         with os.fdopen(fd, "w", encoding=encoding) as f:
             f.write(content)
         os.replace(temp_path, file_path)
+        _chmod_add_bits(file_path, SKILL_FILE_MODE)
     except Exception:
         # Clean up temp file on error
         try:

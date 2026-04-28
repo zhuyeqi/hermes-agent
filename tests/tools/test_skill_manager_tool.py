@@ -196,6 +196,14 @@ class TestCreateSkill:
         assert result["success"] is True
         assert (tmp_path / "my-skill" / "SKILL.md").exists()
 
+    def test_create_skill_file_is_readable_by_other_container_users(self, tmp_path):
+        with _skill_dir(tmp_path):
+            result = _create_skill("my-skill", VALID_SKILL_CONTENT)
+
+        skill_md = tmp_path / "my-skill" / "SKILL.md"
+        assert result["success"] is True
+        assert skill_md.stat().st_mode & 0o044 == 0o044
+
     def test_create_with_category(self, tmp_path):
         with _skill_dir(tmp_path):
             result = _create_skill("my-skill", VALID_SKILL_CONTENT, category="devops")

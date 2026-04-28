@@ -1,0 +1,61 @@
+FROM ghcr.io/astral-sh/uv:0.11.6-python3.13-trixie@sha256:b3c543b6c4f23a5f2df22866bd7857e5d304b67a564f4feab6ac22044dde719b AS uv_source
+FROM tianon/gosu:1.19-trixie@sha256:3b176695959c71e123eb390d427efc665eeb561b1540e82679c15e992006b8b9 AS gosu_source
+FROM debian:13.4
+
+ENV PYTHONUNBUFFERED=1
+
+# Dev image uses one system Chromium. agent-browser is installed by npm,
+# but its browser download step is intentionally skipped.
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
+
+RUN sed -i 's|http://deb.debian.org/debian|http://mirrors.aliyun.com/debian|g; s|http://security.debian.org/debian-security|http://mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list.d/debian.sources
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        build-essential nodejs npm python3 ripgrep ffmpeg gcc python3-dev libffi-dev \
+        procps git openssh-client docker-cli chromium poppler-utils tini ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN useradd -u 10000 -m -d /opt/data hermes
+
+COPY --chmod=0755 --from=gosu_source /gosu /usr/local/bin/
+COPY --chmod=0755 --from=uv_source /usr/local/bin/uv /usr/local/bin/uvx /usr/local/bin/
+
+WORKDIR /opt/hermes
+
+# ---------- Layer-cached dependency install ----------
+COPY package.json package-lock.json ./
+COPY web/package.json web/package-lock.json web/
+
+# Keep this aligned with Dockerfile: install repo JS dependencies and web
+# dependencies before copying source so cache survives source edits.
+# Install the agent-browser CLI explicitly so this dev image does not depend
+# on package.json declaring it. Do not run `agent-browser install` or
+# `playwright install`; both download browser binaries. The image relies on
+# apt's single /usr/bin/chromium.
+RUN npm install --prefer-offline --no-audit && \
+    npm install -g --prefer-offline --no-audit agent-browser && \
+    (cd web && npm install --prefer-offline --no-audit) && \
+    npm cache clean --force
+
+# ---------- Source code ----------
+COPY --chown=hermes:hermes . .
+
+RUN cd web && npm run build
+
+# ---------- Python virtualenv ----------
+RUN uv venv && \
+    uv pip install --no-cache-dir -e ".[all]" && \
+    uv pip install --no-cache-dir pymupdf pymupdf4llm defusedxml "markitdown[pptx]"
+
+# ---------- Permissions ----------
+# Must run AFTER venv creation so .venv/ is also world-readable.
+RUN chmod -R a+rX /opt/hermes
+
+ENV HERMES_WEB_DIST=/opt/hermes/hermes_cli/web_dist
+ENV HERMES_HOME=/opt/data
+ENV PATH="/opt/hermes/node_modules/.bin:/opt/data/.local/bin:${PATH}"
+VOLUME [ "/opt/data" ]
+
+ENTRYPOINT [ "/usr/bin/tini", "-g", "--", "/opt/hermes/docker/entrypoint.sh" ]

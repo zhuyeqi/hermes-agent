@@ -1,0 +1,60 @@
+#
+# docker-compose.dev.yml — slim image + rootless-safe entrypoint.
+#
+# Targets remote hosts where Docker is started by an unprivileged user
+# (rootless Docker).  The bind mount on ${HOME}/.hermes is written by the
+# host user; docker/entrypoint.remote.dev.sh keeps the container UID
+# aligned with that user instead of switching to a hard-coded `hermes`
+# UID that cannot write to the volume.
+#
+# Usage:
+#   mkdir -p ~/.hermes
+#   docker compose -f docker-compose.dev.yml up -d --build
+#
+# HERMES_UID / HERMES_GID are optional and only used in rootful Docker.
+# They are ignored in rootless mode (the container "root" already maps to
+# the host user, so chown will succeed harmlessly or fail-safe).
+#
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    image: hermes-agent-dev
+    container_name: hermes
+    restart: unless-stopped
+    network_mode: host
+    entrypoint:
+      - /usr/bin/tini
+      - -g
+      - --
+      - /opt/hermes/docker/entrypoint.remote.dev.sh
+    volumes:
+      - ${HOME}/.hermes:/opt/data
+    environment:
+      HERMES_HOME: /opt/data
+      HERMES_UID: ${HERMES_UID:-}
+      HERMES_GID: ${HERMES_GID:-}
+      API_SERVER_HOST: 0.0.0.0
+      API_SERVER_KEY: ${API_SERVER_KEY:-hermes-open-webui-secret}
+    command: ["gateway", "run"]
+
+  dashboard:
+    image: hermes-agent-dev
+    container_name: hermes-dashboard
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      - gateway
+    entrypoint:
+      - /usr/bin/tini
+      - -g
+      - --
+      - /opt/hermes/docker/entrypoint.remote.dev.sh
+    volumes:
+      - ${HOME}/.hermes:/opt/data
+    environment:
+      HERMES_HOME: /opt/data
+      HERMES_UID: ${HERMES_UID:-}
+      HERMES_GID: ${HERMES_GID:-}
+    command: ["dashboard", "--host", "127.0.0.1", "--no-open"]

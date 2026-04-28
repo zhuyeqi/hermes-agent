@@ -50,12 +50,24 @@ if [ "$(id -u)" = "0" ]; then
         chmod 640 "$HERMES_HOME/config.yaml" 2>/dev/null || true
     fi
 
+    # Create XDG runtime dir for Chromium/Playwright IPC sockets.
+    # Without this, agent-browser fails with "Failed to create socket
+    # directory: Permission denied" because /run/user/{uid} doesn't
+    # exist in minimal container images.
+    xdg_runtime="/run/user/${actual_hermes_uid}"
+    mkdir -p "$xdg_runtime"
+    chown hermes:hermes "$xdg_runtime"
+    chmod 700 "$xdg_runtime"
+
     echo "Dropping root privileges"
     exec gosu hermes "$0" "$@"
 fi
 
 # --- Running as hermes from here ---
 source "${INSTALL_DIR}/.venv/bin/activate"
+
+# Export XDG_RUNTIME_DIR so Chromium/Playwright can create IPC sockets.
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 
 # Create essential directory structure.  Cache and platform directories
 # (cache/images, cache/audio, platforms/whatsapp, etc.) are created on
