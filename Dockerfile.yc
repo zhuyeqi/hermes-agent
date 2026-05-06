@@ -13,7 +13,7 @@ RUN sed -i 's|http://deb.debian.org/debian|http://mirrors.aliyun.com/debian|g; s
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        build-essential nodejs npm python3 ripgrep ffmpeg gcc python3-dev libffi-dev \
+        build-essential nodejs npm python3 ripgrep ffmpeg gcc python3-dev libffi-dev curl \
         procps git openssh-client docker-cli chromium poppler-utils tini ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
@@ -27,6 +27,10 @@ WORKDIR /opt/hermes
 # ---------- Layer-cached dependency install ----------
 COPY package.json package-lock.json ./
 COPY web/package.json web/package-lock.json web/
+COPY ui-tui/package.json ui-tui/package-lock.json ui-tui/
+COPY ui-tui/packages/hermes-ink/ ui-tui/packages/hermes-ink/
+
+ENV npm_config_install_links=false
 
 # Keep this aligned with Dockerfile: install repo JS dependencies and web
 # dependencies before copying source so cache survives source edits.
@@ -37,12 +41,14 @@ COPY web/package.json web/package-lock.json web/
 RUN npm install --prefer-offline --no-audit && \
     npm install -g --prefer-offline --no-audit agent-browser && \
     (cd web && npm install --prefer-offline --no-audit) && \
+    (cd ui-tui && npm install --prefer-offline --no-audit) && \
     npm cache clean --force
 
 # ---------- Source code ----------
 COPY --chown=hermes:hermes . .
 
-RUN cd web && npm run build
+RUN cd web && npm run build && \
+    cd ../ui-tui && npm run build
 
 # ---------- Python virtualenv ----------
 RUN uv venv && \
