@@ -1,63 +1,31 @@
-# --- VCS ---
+# Git
 .git
 .gitignore
 .gitmodules
-.gitattributes
-.github
-.mailmap
 
-# --- IDE / editor / local plans ---
-.idea
-.vscode
-.cursor
-.claude
-.plans
-
-# --- Python caches ---
-__pycache__
-**/__pycache__
-*.py[cod]
-*.egg-info
-.pytest_cache
-.mypy_cache
-.ruff_cache
-.coverage
-htmlcov
-
-# --- Local virtualenvs / installed deps (rebuilt inside the image) ---
-.venv
-venv
+# Dependencies
 node_modules
 **/node_modules
-web/node_modules
+.venv
+**/.venv
 
-# --- Local Hermes state and worktrees (must not leak into /opt/data) ---
-data
-.tmp-hermes-home
-worktrees
+# Built artifacts that are regenerated inside the image.  Excluded so local
+# rebuilds on the developer's machine don't invalidate the npm-install layer
+# that now depends on the full ui-tui/packages/hermes-ink/ tree being present.
+ui-tui/dist/
+ui-tui/packages/hermes-ink/dist/
 
-# --- Build-only / docs-site assets not needed at runtime ---
-tests
-website
-packaging
-benchmarks
-docs/superpowers
-RELEASE_*.md
+# CI/CD
+.github
 
-# --- Local secrets ---
+# Environment files
 .env
-.envrc
 
-# --- Release tarballs and generated archives accidentally left in repo ---
-*.tar
-*.tar.gz
-*.tgz
-*.zip
-
-# --- Markdown noise (release notes, contributor docs) ---
-# Keep docker/SOUL.md because docker/entrypoint*.sh copies it into /opt/data,
-# and skill docs because skills/ + optional-skills/ are loaded at runtime.
 *.md
-!docker/SOUL.md
-!skills/**/*.md
-!optional-skills/**/*.md
+
+# Runtime data (bind-mounted at /opt/data; must not leak into build context)
+data/
+
+# Compose/profile runtime state (bind-mounted; avoid ownership/secret issues)
+hermes-config/
+runtime/
