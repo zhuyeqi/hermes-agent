@@ -8574,9 +8574,14 @@ class AIAgent:
             if _ephemeral_out is not None:
                 self._ephemeral_max_output_tokens = None
 
+            # Keep non-vision image fallback parity with legacy chat_completions:
+            # if the active model lacks vision, replace native image parts with
+            # vision_analyze text descriptions before provider-profile kwargs build.
+            _msgs_for_profile_chat = self._prepare_messages_for_non_vision_model(api_messages)
+
             return _ct.build_kwargs(
                 model=self.model,
-                messages=api_messages,
+                messages=_msgs_for_profile_chat,
                 tools=self.tools,
                 base_url=self.base_url,
                 timeout=self._resolved_api_call_timeout(),

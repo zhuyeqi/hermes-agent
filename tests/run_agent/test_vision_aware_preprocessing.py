@@ -32,6 +32,38 @@ def _make_agent() -> AIAgent:
     return agent
 
 
+def _make_chat_agent_for_kwargs() -> AIAgent:
+    """Build a minimal chat_completions agent for _build_api_kwargs tests."""
+    agent = object.__new__(AIAgent)
+    agent.api_mode = "chat_completions"
+    agent.provider = "custom"
+    agent.model = "qwen3-coder-480b-a35b"
+    agent.base_url = "http://127.0.0.1:8000/v1"
+    agent._base_url_lower = agent.base_url.lower()
+    agent._base_url_hostname = "127.0.0.1"
+    agent.tools = []
+    agent.max_tokens = 4096
+    agent.reasoning_config = {}
+    agent.request_overrides = {}
+    agent.session_id = "sess_test"
+    agent.providers_allowed = []
+    agent.providers_ignored = []
+    agent.providers_order = []
+    agent.provider_sort = None
+    agent.provider_require_parameters = False
+    agent.provider_data_collection = None
+    agent._ephemeral_max_output_tokens = None
+    agent._ollama_num_ctx = None
+    agent._max_tokens_param = lambda x: {"max_tokens": x}
+    agent._is_qwen_portal = lambda: False
+    agent._is_openrouter_url = lambda: False
+    agent._resolved_api_call_timeout = lambda: 30.0
+    agent._supports_reasoning_extra_body = lambda: False
+    agent._github_models_reasoning_extra_body = lambda: None
+    agent._lmstudio_reasoning_options_cached = lambda: None
+    return agent
+
+
 IMG_PARTS_USER_MSG = {
     "role": "user",
     "content": [
@@ -134,6 +166,29 @@ class TestPrepareMessagesForNonVision:
         assert out[1]["content"] == "ack"
         assert isinstance(out[2]["content"], str)
         assert "[Image: thing]" in out[2]["content"]
+
+
+class TestBuildApiKwargsProfilePath:
+    def test_profile_path_still_applies_non_vision_image_fallback(self):
+        """Provider-profile chat_completions path must preserve image fallback."""
+        agent = _make_chat_agent_for_kwargs()
+        expected_msgs = [{"role": "user", "content": "[Image description: fallback]"}]
+        transport = MagicMock()
+        transport.build_kwargs.return_value = {"messages": expected_msgs}
+        agent._get_transport = lambda: transport
+
+        with patch("providers.get_provider_profile", return_value=object()), \
+             patch.object(
+                 agent,
+                 "_prepare_messages_for_non_vision_model",
+                 return_value=expected_msgs,
+             ) as prep_mock:
+            result = agent._build_api_kwargs([IMG_PARTS_USER_MSG])
+
+        prep_mock.assert_called_once_with([IMG_PARTS_USER_MSG])
+        assert transport.build_kwargs.call_count == 1
+        assert transport.build_kwargs.call_args.kwargs["messages"] == expected_msgs
+        assert result["messages"] == expected_msgs
 
 
 # ─── _model_supports_vision ──────────────────────────────────────────────────
