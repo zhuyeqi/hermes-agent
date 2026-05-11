@@ -7,12 +7,12 @@ set -euo pipefail
 # Required env:
 #   SKILL_DIR  - path to this skill directory
 #   BASE_URL   - ERM base URL, e.g. http://10.83.2.11:8008
-#   COOKIE     - raw Cookie request header value (single line, no "Cookie:" prefix)
 #
 # Optional env:
-#   CDP_PORT        - default: 9222
-#   ATTACHMENT_FILE - optional local file path to upload
-#   DRY_RUN         - "1" to only build payload (default: 0)
+#   PROFILE_DIR      - agent-browser profile dir (default: /opt/data/erm-browser-profile)
+#   COOKIE           - raw Cookie header; if unset, auto-exported from profile
+#   ATTACHMENT_FILE  - optional local file path to upload
+#   DRY_RUN          - "1" to only build payload (default: 0)
 #
 # Required args:
 #   --zy --amount --tax-amount --vat-amount --expense-item --invoice-type --invoice-no
@@ -20,7 +20,8 @@ set -euo pipefail
 # Output artifacts in current working directory:
 #   menu_url.json, dispatch.json, defaults.json, attachment.json (optional), save_result.json
 
-CDP_PORT="${CDP_PORT:-9222}"
+PROFILE_DIR="${PROFILE_DIR:-/opt/data/erm-browser-profile}"
+COOKIE="${COOKIE:-}"
 ATTACHMENT_FILE="${ATTACHMENT_FILE:-}"
 DRY_RUN="${DRY_RUN:-0}"
 
@@ -35,11 +36,11 @@ step() {
 
 evidence_dispatch_failure() {
   echo "== evidence: current_url" >&2
-  agent-browser --cdp "$CDP_PORT" get url || true
+  agent-browser --profile "$PROFILE_DIR" get url || true
   echo "== evidence: tabs" >&2
-  agent-browser --cdp "$CDP_PORT" --json tab list || true
+  agent-browser --profile "$PROFILE_DIR" tab || true
   echo "== evidence: dispatch_requests" >&2
-  agent-browser --cdp "$CDP_PORT" --json network requests --filter "/iwebap/evt/dispatch" || true
+  agent-browser --profile "$PROFILE_DIR" network requests --filter "/iwebap/evt/dispatch" || true
 }
 
 require_env() {
@@ -49,11 +50,34 @@ require_env() {
 
 require_env SKILL_DIR
 require_env BASE_URL
-require_env COOKIE
 
 if [[ ! -d "$SKILL_DIR/scripts" ]]; then
   die "SKILL_DIR does not look like the skill directory: $SKILL_DIR"
 fi
+
+# --- Login check ---
+step "check_erm_login"
+agent-browser --profile "$PROFILE_DIR" open "${BASE_URL}/portal/app/mockapp/login.jsp?lrid=1"
+agent-browser --profile "$PROFILE_DIR" wait --load networkidle
+
+CURRENT_URL="$(agent-browser --profile "$PROFILE_DIR" get url)"
+if echo "$CURRENT_URL" | grep -q "login.jsp"; then
+  die "ERM session expired or not logged in. Login first using: agent-browser --profile $PROFILE_DIR"
+fi
+step "erm_login_ok"
+
+# --- Cookie export ---
+if [[ -z "$COOKIE" ]]; then
+  step "export_cookies"
+  agent-browser --profile "$PROFILE_DIR" cookies get > cdp_cookies.json
+
+  COOKIE="$(python3 "$SKILL_DIR/scripts/build_cookie_header.py" \
+    --cookies-json cdp_cookies.json \
+    | python3 -c "import json,sys; print(json.load(sys.stdin)['cookie_header'])")"
+  [[ -n "$COOKIE" ]] || die "failed to build cookie header from profile"
+fi
+
+# --- Pipeline ---
 
 step "get_general_reimbursement_url"
 python3 "$SKILL_DIR/scripts/get_general_reimbursement_url.py" \
@@ -73,8 +97,8 @@ if not u:
 print("Gate.B ok")
 PY
 
-step "capture_dispatch (agent-browser network log + new tab)"
-agent-browser --cdp "$CDP_PORT" network requests --clear
+step "capture_dispatch (HAR recording)"
+agent-browser --profile "$PROFILE_DIR" network har start
 
 ADD_URL="$(python3 - <<'PY'
 import json, os
@@ -91,103 +115,41 @@ print(urljoin(base_url.rstrip("/") + "/", url))
 PY
 )"
 
-agent-browser --cdp "$CDP_PORT" --json tab list > /tmp/erm_tabs_before.json
-agent-browser --cdp "$CDP_PORT" open "$ADD_URL"
-agent-browser --cdp "$CDP_PORT" wait 5000
-agent-browser --cdp "$CDP_PORT" --json tab list > /tmp/erm_tabs_after.json
+agent-browser --profile "$PROFILE_DIR" open "$ADD_URL"
+agent-browser --profile "$PROFILE_DIR" wait --load networkidle
+
+step "extract_dispatch_from_har"
+agent-browser --profile "$PROFILE_DIR" network har stop /tmp/dispatch.har
 
 python3 - <<'PY'
 import json
 from pathlib import Path
 
-before = json.loads(Path("/tmp/erm_tabs_before.json").read_text(encoding="utf-8"))
-after = json.loads(Path("/tmp/erm_tabs_after.json").read_text(encoding="utf-8"))
+har = json.loads(Path("/tmp/dispatch.har").read_text(encoding="utf-8"))
+entries = har.get("log", {}).get("entries", [])
 
-def extract_tabs(x):
-    if isinstance(x, dict):
-        if isinstance(x.get("tabs"), list):
-            return x["tabs"]
-        data = x.get("data")
-        if isinstance(data, dict) and isinstance(data.get("tabs"), list):
-            return data["tabs"]
-    if isinstance(x, list):
-        return x
-    return []
+dispatch_entries = [
+    e for e in entries
+    if "/iwebap/evt/dispatch" in e.get("request", {}).get("url", "")
+]
 
-tabs_before = extract_tabs(before)
-tabs_after = extract_tabs(after)
+if not dispatch_entries:
+    raise SystemExit(
+        "Gate.C failed: no /iwebap/evt/dispatch in HAR "
+        f"(total entries: {len(entries)})"
+    )
 
-def tab_key(t):
-    if not isinstance(t, dict):
-        return None
-    return (t.get("id") or t.get("index") or t.get("n"), t.get("url") or t.get("title"))
+entry = dispatch_entries[-1]
+body_text = entry.get("response", {}).get("content", {}).get("text", "")
+if not body_text:
+    raise SystemExit("Gate.C failed: dispatch entry has empty response body")
 
-keys_before = set(k for k in (tab_key(t) for t in tabs_before) if k)
-new_tabs = [t for t in tabs_after if tab_key(t) and tab_key(t) not in keys_before]
+data = json.loads(body_text)
+if not isinstance(data, dict) or "dataTables" not in data:
+    raise SystemExit("Gate.C failed: dispatch body missing dataTables")
 
-def tab_index(t):
-    if not isinstance(t, dict):
-        return None
-    return t.get("id") or t.get("index") or t.get("n")
-
-chosen = new_tabs[-1] if new_tabs else (tabs_after[-1] if tabs_after else None)
-idx = tab_index(chosen)
-if idx is None:
-    raise SystemExit("cannot determine tab index; switch manually and rerun")
-Path("/tmp/erm_tab_to_use.txt").write_text(str(idx), encoding="utf-8")
-print(idx)
-PY
-
-TAB_TO_USE="$(python3 -c 'from pathlib import Path; print(Path("/tmp/erm_tab_to_use.txt").read_text().strip())')"
-agent-browser --cdp "$CDP_PORT" tab "$TAB_TO_USE"
-agent-browser --cdp "$CDP_PORT" wait 2000
-
-agent-browser --cdp "$CDP_PORT" --json network requests --filter "/iwebap/evt/dispatch" > /tmp/dispatch_requests.json
-
-python3 - <<'PY'
-import json
-from pathlib import Path
-
-raw = json.loads(Path("/tmp/dispatch_requests.json").read_text(encoding="utf-8"))
-requests = ((raw.get("data") or {}).get("requests") or raw.get("requests") or [])
-
-def values(node):
-    if isinstance(node, dict):
-        for v in node.values():
-            yield v
-            yield from values(v)
-    elif isinstance(node, list):
-        for v in node:
-            yield v
-            yield from values(v)
-
-payload = None
-hit_url = None
-
-for req in reversed(requests):
-    url = str(req.get("url") or req.get("request", {}).get("url") or req.get("response", {}).get("url") or "")
-    if "/iwebap/evt/dispatch" not in url:
-        continue
-    for v in values(req):
-        if not isinstance(v, str) or "dataTables" not in v:
-            continue
-        try:
-            obj = json.loads(v)
-        except Exception:
-            continue
-        if isinstance(obj, dict) and "dataTables" in obj:
-            payload = obj
-            hit_url = url
-            break
-    if payload is not None:
-        break
-
-if payload is None:
-    raise SystemExit("Gate.C failed: dispatch response body not found in agent-browser network log")
-
-Path("dispatch.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+Path("dispatch.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 print("Gate.C ok")
-print(f"dispatch_url={hit_url}")
 PY
 
 step "extract_dispatch_defaults"
@@ -261,4 +223,3 @@ python3 "$SKILL_DIR/scripts/save_general_reimbursement_from_dispatch.py" \
   > save_result.json
 
 step "done (artifacts: menu_url.json dispatch.json defaults.json save_result.json)"
-

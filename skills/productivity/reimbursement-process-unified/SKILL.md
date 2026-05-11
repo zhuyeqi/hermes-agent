@@ -1,10 +1,10 @@
 ---
 name: reimbursement-process-unified
-description: 自动处理内网 ERM 通用报销单。适用于根据发票信息创建通用报销单、上传附件、保存单据；优先用脚本调用 ERM 接口，浏览器经 CDP 负责登录与同会话 Cookie 导出（本地 `agent-browser --cdp 9222 cookies get`）、捕获 dispatch 初始化数据和最终核验。
+description: 自动处理内网 ERM 通用报销单。适用于根据发票信息创建通用报销单、上传附件、保存单据；agent-browser 以 --profile 模式管理浏览器，负责登录、Cookie 导出、HAR 捕获 dispatch 初始化数据和最终核验。
 author: Hermes Agent
-version: 1.2
+version: 2.0
 created: 2026-05-06
-updated: 2026-05-09
+updated: 2026-05-11
 tags: [finance, reimbursement, internal-system, browser, scripts]
 requires:
   - browser
@@ -16,7 +16,7 @@ requires:
 
 ## 目标
 
-用“浏览器 + 脚本”的混合方式创建 ERM 通用报销单，减少纯浏览器点击带来的识别失败。
+用"浏览器 + 脚本"的混合方式创建 ERM 通用报销单，减少纯浏览器点击带来的识别失败。
 
 成功标准：
 - 成功登录 ERM，并拿到有效 Cookie。
@@ -34,13 +34,10 @@ requires:
 - 上传附件。
 - 构造并提交保存表单。
 
-只在这些场景使用浏览器：
-- 登录 ERM。
-- **同一 CDP 连接上**完成导航、登录与后续页面操作；不要混用“无 CDP 的本地会话”和“另起的抓包/复制流程”去拼 Cookie。
-- 登录成功后，用 **CDP 整 jar 导出 Cookie**（见下一节，本地命令：`agent-browser --cdp 9222 cookies get`），包含 `HttpOnly` 的 `JSESSIONID` 等；不要用 `document.cookie` 或任何只能看到非 HttpOnly 的接口作为最终来源。
-- 需要网络证据时，可在同一 CDP 会话上开启请求/响应日志，捕获 `/iwebap/evt/dispatch` 等；**获取 Cookie 本身不依赖**手工复制 `/portal/core` 的 `Set-Cookie` 或 `/mp/msgtype/list` 的 Request `Cookie`（这些仅作无法导出 CDP cookie 时的兜底）。
-- 可选：在拿到 `Cookie` 请求头后，用 `probe_cookie_context.py --probe-msgtype-list` 走一次 `${BASE_URL}/mp/msgtype/list` 做会话校验（脚本请求），不是为“从该请求偷 Cookie”。
-- 打开通用报销单新增页，等待页面初始化，并捕获最新 `/iwebap/evt/dispatch` 响应。
+只在这些场景使用浏览器（agent-browser `--profile` 模式）：
+- 登录 ERM（AI 交互式操作，不写入脚本）。
+- Cookie 导出：`agent-browser --profile $PROFILE_DIR cookies get`，包含 `HttpOnly` 的 `JSESSIONID` 等。
+- HAR 录制：捕获 `/iwebap/evt/dispatch` 响应用于提取默认字段。
 - 保存后核验单据状态，或脚本不支持的异常 UI 流程。
 
 不要依赖旧的页面元素 ref。每次浏览器操作前重新观察页面。
@@ -49,7 +46,7 @@ requires:
 
 - 系统 URL：当前已验证默认值是 `http://10.83.2.11:8008`。如果用户或运行环境提供了其他 `BASE_URL`，必须原样使用用户/环境提供的值。
 - 登录页面：`${BASE_URL}/portal/app/mockapp/login.jsp?lrid=1`。
-- ERM 登录账号和密码：必须由用户提供；不要使用技能中的固定默认账号或历史账号。
+- ERM 登录账号和密码：必须由用户提供；不要使用技能中的固定默认账号或历史账号。每次可能是不同用户，AI 需要询问。
 
 ## 准备信息
 
@@ -70,52 +67,60 @@ requires:
 ## 脚本位置
 
 本技能自带脚本在 `scripts/`：
-- `build_cookie_header.py`：**首选**从 CDP cookies JSON（例如本地 `agent-browser --cdp 9222 cookies get` 输出，形如 `{"cookies":[...]}`）或 Playwright `storage_state` 生成并校验原始 `Cookie` 请求头。
-- `merge_set_cookie_header.py`：仅当拿不到 CDP/Playwright 级 cookie 导出时，用 `/portal/core` response `Set-Cookie` 等合并生成 `Cookie` 请求头（兜底）。
+- `build_cookie_header.py`：从 cookies JSON（`agent-browser --profile $PROFILE_DIR cookies get` 输出）生成并校验原始 `Cookie` 请求头。
+- `merge_set_cookie_header.py`：仅当拿不到 cookie 导出时，用 `/portal/core` response `Set-Cookie` 等合并生成 `Cookie` 请求头（兜底）。
 - `probe_cookie_context.py`：检查 Cookie 是否包含 ERM 会话关键字段。
 - `get_general_reimbursement_url.py`：调用菜单接口获取通用报销单新增页 URL。
 - `extract_dispatch_defaults.py`：从 dispatch 响应提取保存表单必需默认值。
 - `upload_reimbursement_attachment.py`：上传附件并返回 `accessorybillid`。
 - `save_general_reimbursement_from_dispatch.py`：从 dispatch 默认值和发票字段构造并保存单据。
 - `post_save_form.py`：仅用于调试，提交已经构造好的保存表单。
+- `run_reimbursement_pipeline.sh`：单入口脚本，自动完成登录检查、Cookie 导出、HAR 录制、单据保存。
 
 运行时用当前技能目录，不要写死本机绝对路径。若执行器没有自动定位技能目录，先让运行环境提供实际技能目录，再赋给 `SKILL_DIR`：
 
 ```bash
 SKILL_DIR="<actual-skill-directory>"
 BASE_URL="<user-or-environment-provided-erm-base-url>"
-python3 "$SKILL_DIR/scripts/probe_cookie_context.py" --help
 ```
 
-## 推荐流程（只保留三步）
+## 推荐流程（两步）
 
-### 1) 登录（同一 CDP 会话）
-- 在 `agent-browser --cdp 9222` 的同一浏览器会话完成 ERM 登录。
-- 不要混用不同浏览器会话。
+### 1) 登录（AI 交互式，使用 --profile 模式）
 
-### 2) 获取 Cookie 并校验
-- 从同一会话导出 cookies，构造 `COOKIE` 字符串，并执行会话校验。
+AI 询问用户 ERM 账号和密码，然后操作浏览器完成登录：
+
+```bash
+PROFILE_DIR="${PROFILE_DIR:-/opt/data/erm-browser-profile}"
+BASE_URL="<user-or-environment-provided-erm-base-url>"
+
+# 打开登录页
+agent-browser --profile "$PROFILE_DIR" open "${BASE_URL}/portal/app/mockapp/login.jsp?lrid=1"
+agent-browser --profile "$PROFILE_DIR" wait --load networkidle
+
+# AI 使用 snapshot 或 screenshot 观察页面，找到账号和密码输入框
+agent-browser --profile "$PROFILE_DIR" snapshot -i
+# 根据页面结构，填入用户提供的账号密码
+agent-browser --profile "$PROFILE_DIR" fill @e<ref> '<account>'
+agent-browser --profile "$PROFILE_DIR" fill @e<ref> '<password>'
+agent-browser --profile "$PROFILE_DIR" click @e<ref>
+agent-browser --profile "$PROFILE_DIR" wait --load networkidle
+
+# 验证登录成功（页面应跳转，不再包含 login.jsp）
+agent-browser --profile "$PROFILE_DIR" get url
+```
+
+登录成功后，session 自动保存在 profile 目录中，后续运行可复用。
+
+### 2) 执行单入口脚本
+
+脚本自动完成：登录检查 → Cookie 导出 → 获取 URL → HAR 录制 → 提取默认值 → 保存单据。
 
 ```bash
 export SKILL_DIR="<actual-skill-directory>"
 export BASE_URL="<user-or-environment-provided-erm-base-url>"
+export PROFILE_DIR="${PROFILE_DIR:-/opt/data/erm-browser-profile}"
 
-agent-browser --cdp 9222 cookies get > cdp_cookies.json
-python3 "$SKILL_DIR/scripts/build_cookie_header.py" --cookies-json cdp_cookies.json
-
-# 把上一步输出的 cookie_header 赋值给 COOKIE
-export COOKIE='...'
-
-python3 "$SKILL_DIR/scripts/probe_cookie_context.py" \
-  --base-url "$BASE_URL" \
-  --cookie "$COOKIE" \
-  --probe-msgtype-list
-```
-
-### 3) 执行单入口脚本
-- 这是默认执行路径；不要手工拆步骤。
-
-```bash
 "$SKILL_DIR/scripts/run_reimbursement_pipeline.sh" \
   --zy '摘要及用途' \
   --amount '116.46' \
@@ -133,19 +138,30 @@ python3 "$SKILL_DIR/scripts/probe_cookie_context.py" \
 - `attachment.json`（有附件时）
 - `save_result.json`
 
+## 环境变量
+
+| 变量 | 必填 | 默认值 | 说明 |
+|------|------|--------|------|
+| `SKILL_DIR` | 是 | — | 技能目录路径 |
+| `BASE_URL` | 是 | — | ERM 基础地址 |
+| `PROFILE_DIR` | 否 | `/opt/data/erm-browser-profile` | agent-browser profile 目录（持久化登录态） |
+| `COOKIE` | 否 | 自动从 profile 导出 | 手动指定的 Cookie 头；不设则脚本自动导出 |
+| `ATTACHMENT_FILE` | 否 | — | 附件本地路径 |
+| `DRY_RUN` | 否 | `0` | 设为 `1` 仅构造 payload 不提交 |
+
 ## 执行契约（Hard Gates，禁止自由发挥）
 
 以下规则是硬门禁。**任意一条不满足就必须停止**，禁止猜测字段、禁止跳步、禁止自动改走纯视觉继续提交。
 
-- **Gate.A（Cookie）**：`probe_cookie_context.py --probe-msgtype-list` 显示已认证，且 `missing_required_cookie_names` 为空。
+- **Gate.A（Login）**：脚本打开登录页后 URL 不含 `login.jsp`，说明 session 有效。
 - **Gate.B（menu_url.json）**：`menu_url.json` 包含 `result.absolute_url`，且 `success=true`。
-- **Gate.C（dispatch.json）**：顶层为对象，且包含 `dataTables`。
+- **Gate.C（dispatch.json）**：HAR 中找到 `/iwebap/evt/dispatch` 响应，解析后顶层为对象且包含 `dataTables`。
 - **Gate.D（defaults.json）**：必须包含 `head.pk_org_v`、`head.deptid_v`、`head.jsfs`、`head.skyhzh`、`body.defitem13`。
 - **Gate.E（attachment）**：如要求附件，必须 `ok=true` 且有 `accessorybillid`。
 
 失败处理规范：
 - `dispatch` 只允许一次标准重试。
-- 重试仍失败必须停机并输出证据（当前 URL、tab 列表、dispatch 过滤结果条目数）。
+- 重试仍失败必须停机并输出证据（当前 URL、HAR 条目数）。
 
 ## 验证与回归清单（必须执行）
 
