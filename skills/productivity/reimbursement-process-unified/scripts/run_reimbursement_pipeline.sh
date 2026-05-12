@@ -3,12 +3,12 @@ set -euo pipefail
 
 # Single-entry orchestrator for the reimbursement skill.
 # Intentionally strict: stops on missing artifacts and prints evidence.
+# ERM host: single source of truth in scripts/erm_common.py (ERM_BASE_URL); shell reads it below.
 #
 # Required env:
 #   SKILL_DIR  - path to this skill directory
 #
 # Optional env:
-#   BASE_URL         - ERM base URL (default: http://10.83.2.11:8008)
 #   PROFILE_DIR      - agent-browser profile dir (default: /opt/data/erm-browser-profile)
 #   COOKIE           - raw Cookie header; if unset, auto-exported from profile
 #   ATTACHMENT_FILE  - optional local file path to upload
@@ -50,16 +50,19 @@ require_env() {
 
 require_env SKILL_DIR
 
-BASE_URL="${BASE_URL:-http://10.83.2.11:8008}"
-export BASE_URL
-
 if [[ ! -d "$SKILL_DIR/scripts" ]]; then
   die "SKILL_DIR does not look like the skill directory: $SKILL_DIR"
 fi
 
+ERM_BASE_URL="$(
+  PYTHONPATH="${SKILL_DIR}/scripts" python3 -c "from erm_common import ERM_BASE_URL; print(ERM_BASE_URL)"
+)"
+[[ -n "$ERM_BASE_URL" ]] || die "failed to resolve ERM_BASE_URL from erm_common.py"
+export ERM_BASE_URL
+
 # --- Login check ---
 step "check_erm_login"
-agent-browser --profile "$PROFILE_DIR" open "${BASE_URL}/portal/app/mockapp/login.jsp?lrid=1"
+agent-browser --profile "$PROFILE_DIR" open "${ERM_BASE_URL}/portal/app/mockapp/login.jsp?lrid=1"
 agent-browser --profile "$PROFILE_DIR" wait --load networkidle
 
 CURRENT_URL="$(agent-browser --profile "$PROFILE_DIR" get url)"
@@ -83,7 +86,6 @@ fi
 
 step "get_general_reimbursement_url"
 python3 "$SKILL_DIR/scripts/get_general_reimbursement_url.py" \
-  --base-url "$BASE_URL" \
   --cookie "$COOKIE" \
   > menu_url.json
 
@@ -103,11 +105,12 @@ step "capture_dispatch (network monitor)"
 agent-browser --profile "$PROFILE_DIR" network requests --clear
 
 ADD_URL="$(python3 - <<'PY'
-import json, os
+import json
+import os
 from pathlib import Path
 from urllib.parse import urljoin
 
-base_url = os.environ["BASE_URL"]
+base_url = os.environ["ERM_BASE_URL"]
 data = json.loads(Path("menu_url.json").read_text(encoding="utf-8"))
 result = data.get("result") or data
 url = result.get("absolute_url") or result.get("url")
@@ -192,7 +195,6 @@ accessorybillid=""
 if [[ -n "$ATTACHMENT_FILE" ]]; then
   step "upload_attachment"
   python3 "$SKILL_DIR/scripts/upload_reimbursement_attachment.py" \
-    --base-url "$BASE_URL" \
     --cookie "$COOKIE" \
     --file "$ATTACHMENT_FILE" \
     > attachment.json
@@ -214,7 +216,6 @@ fi
 
 step "save_bill"
 save_args=(
-  --base-url "$BASE_URL"
   --cookie "$COOKIE"
   --dispatch-json dispatch.json
   --accessorybillid "$accessorybillid"

@@ -9,7 +9,7 @@ Use --probe-msgtype-list to verify the Cookie against /mp/msgtype/list.
 import argparse
 import time
 
-from erm_common import add_common_args, join_url, make_client, parse_cookie_header, print_json
+from erm_common import ERM_BASE_URL, add_common_args, join_url, make_client, parse_cookie_header, print_json
 
 
 REQUIRED_COOKIE_NAMES = (
@@ -36,7 +36,7 @@ def main() -> int:
     cookie = parse_cookie_header(args.cookie)
     missing = [name for name in REQUIRED_COOKIE_NAMES if not cookie.get(name)]
     out = {
-        "base_url_normalized": args.base_url.rstrip("/"),
+        "base_url_normalized": ERM_BASE_URL.rstrip("/"),
         "cookie_context": {
             "user_org(pk_org_candidate)": cookie.get("user_org"),
             "pk_unit(pk_group_candidate)": cookie.get("pk_unit"),
@@ -54,7 +54,7 @@ def main() -> int:
     if args.probe_msgtype_list:
         with make_client(args) as client:
             response = client.get(
-                join_url(args.base_url, f"mp/msgtype/list?_={int(time.time() * 1000)}"),
+                join_url(ERM_BASE_URL, f"mp/msgtype/list?_={int(time.time() * 1000)}"),
                 headers={"Accept": "application/json, text/plain, */*"},
             )
         out["msgtype_list_probe"] = {

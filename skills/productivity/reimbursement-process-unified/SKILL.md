@@ -44,13 +44,13 @@ requires:
 
 ## 前置条件
 
-- **系统 URL（ERM 基础地址）**：固定使用已验证默认值 `http://10.83.2.11:8008`。执行流程与脚本在未设置 `BASE_URL` / `--base-url` 时自动使用该地址；**不要向用户询问**系统 URL。仅当用户或运行环境**显式提供**了其它基础地址时，必须原样使用其值（不增删路径段）。
-- 登录页面：`${BASE_URL}/portal/app/mockapp/login.jsp?lrid=1`。
+- **系统 URL（ERM 基础地址）**：写死在 `scripts/erm_common.py` 的 `ERM_BASE_URL`（当前为 `http://10.83.2.11:8008`）。不向用户收集，不提供环境变量或 CLI 参数覆盖；`run_reimbursement_pipeline.sh` 通过 `PYTHONPATH` 从该模块读取，换主机时只改 `erm_common.py` 一处即可。
+- 登录页面：`http://10.83.2.11:8008/portal/app/mockapp/login.jsp?lrid=1`。
 - ERM 登录账号和密码：必须由用户提供；不要使用技能中的固定默认账号或历史账号。每次可能是不同用户，AI 需要询问。
 
 ## 准备信息
 
-执行前先确认这些输入（**不含**系统基础 URL，除非用户主动声明要换主机）：
+执行前先确认这些输入：
 - ERM 登录账号和密码：必须由用户提供；不要使用技能中的固定默认账号或历史账号。
 - 发票号码：传给 `--invoice-no`。
 - 不含税金额：传给 `--amount`。
@@ -80,22 +80,19 @@ requires:
 
 ```bash
 SKILL_DIR="<actual-skill-directory>"
-# 可选：仅当用户/环境要求非默认主机时设置
-# export BASE_URL="http://..."
 ```
 
 ## 推荐流程（两步）
 
 ### 1) 登录（AI 交互式，使用 --profile 模式）
 
-AI 询问用户 ERM 账号和密码（**不要询问**系统 URL），然后操作浏览器完成登录：
+AI 询问用户 ERM 账号和密码（不要询问系统 URL），然后操作浏览器完成登录：
 
 ```bash
 PROFILE_DIR="${PROFILE_DIR:-/opt/data/erm-browser-profile}"
-BASE_URL="${BASE_URL:-http://10.83.2.11:8008}"
 
-# 打开登录页
-agent-browser --profile "$PROFILE_DIR" open "${BASE_URL}/portal/app/mockapp/login.jsp?lrid=1"
+# 打开登录页（ERM 主机已写死，勿向用户询问 URL）
+agent-browser --profile "$PROFILE_DIR" open "http://10.83.2.11:8008/portal/app/mockapp/login.jsp?lrid=1"
 agent-browser --profile "$PROFILE_DIR" wait --load networkidle
 
 # AI 使用 snapshot 或 screenshot 观察页面，找到账号和密码输入框
@@ -118,8 +115,6 @@ agent-browser --profile "$PROFILE_DIR" get url
 
 ```bash
 export SKILL_DIR="<actual-skill-directory>"
-# BASE_URL 省略时脚本使用默认 http://10.83.2.11:8008
-export BASE_URL="${BASE_URL:-http://10.83.2.11:8008}"
 export PROFILE_DIR="${PROFILE_DIR:-/opt/data/erm-browser-profile}"
 
 "$SKILL_DIR/scripts/run_reimbursement_pipeline.sh" \
@@ -144,7 +139,6 @@ export PROFILE_DIR="${PROFILE_DIR:-/opt/data/erm-browser-profile}"
 | 变量 | 必填 | 默认值 | 说明 |
 |------|------|--------|------|
 | `SKILL_DIR` | 是 | — | 技能目录路径 |
-| `BASE_URL` | 否 | `http://10.83.2.11:8008` | ERM 基础地址；默认已内置，勿向用户征询 |
 | `PROFILE_DIR` | 否 | `/opt/data/erm-browser-profile` | agent-browser profile 目录（持久化登录态） |
 | `COOKIE` | 否 | 自动从 profile 导出 | 手动指定的 Cookie 头；不设则脚本自动导出 |
 | `ATTACHMENT_FILE` | 否 | — | 附件本地路径 |

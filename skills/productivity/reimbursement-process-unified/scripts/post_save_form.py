@@ -10,7 +10,7 @@ import argparse
 import json
 import sys
 
-from erm_common import add_common_args, make_client, post_form, print_json
+from erm_common import ERM_BASE_URL, add_common_args, make_client, post_form, print_json
 
 
 def main() -> int:
@@ -33,7 +33,7 @@ def main() -> int:
     with make_client(args) as client:
         out = post_form(
             client,
-            base_url=args.base_url,
+            base_url=ERM_BASE_URL,
             path="/iwebap/jkbx_maintain_ctr/savebill",
             form=form,
         )

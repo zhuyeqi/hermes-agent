@@ -5,16 +5,11 @@ import json
 import urllib.parse
 from typing import Any
 
-# Verified internal ERM host; override with --base-url or BASE_URL only when required.
-DEFAULT_ERM_BASE_URL = "http://10.83.2.11:8008"
+# Fixed internal ERM host for this skill (not configurable).
+ERM_BASE_URL = "http://10.83.2.11:8008"
 
 
 def add_common_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--base-url",
-        default=DEFAULT_ERM_BASE_URL,
-        help=f"ERM base URL (default: {DEFAULT_ERM_BASE_URL}). Pass explicitly only when targeting another host.",
-    )
     parser.add_argument("--cookie", required=True, help="Raw Cookie header copied from browser")
     parser.add_argument("--timeout", type=float, default=30.0)
 

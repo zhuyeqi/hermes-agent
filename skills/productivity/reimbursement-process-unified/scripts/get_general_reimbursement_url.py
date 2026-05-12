@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 
-from erm_common import add_common_args, join_url, make_client, print_json
+from erm_common import ERM_BASE_URL, add_common_args, join_url, make_client, print_json
 
 
 TRADE_TYPE = "264X-Cxx-TYBXD"
@@ -13,9 +13,7 @@ TRADE_NAME = "通用报销单"
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description=(
-            "Get 通用报销单 page URL via iwebap/menu/url; --base-url defaults to the verified ERM host."
-        )
+        description="Get 通用报销单 page URL via iwebap/menu/url (fixed ERM host)."
     )
     add_common_args(parser)
     args = parser.parse_args()
@@ -24,7 +22,7 @@ def main() -> int:
     payload = {"tradetype": TRADE_TYPE, "tradeName": TRADE_NAME}
 
     with make_client(args) as client:
-        url = join_url(args.base_url, endpoint)
+        url = join_url(ERM_BASE_URL, endpoint)
         response = client.post(
             url,
             json=payload,
@@ -50,7 +48,7 @@ def main() -> int:
             "response": data,
             "result": {
                 "relative_url": relative_url,
-                "absolute_url": join_url(args.base_url, relative_url),
+                "absolute_url": join_url(ERM_BASE_URL, relative_url),
             },
         }
     )

@@ -18,7 +18,7 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
-from erm_common import add_common_args, join_url, make_client, print_json  # noqa: E402
+from erm_common import ERM_BASE_URL, add_common_args, join_url, make_client, print_json  # noqa: E402
 
 if TYPE_CHECKING:
     import httpx
@@ -150,14 +150,14 @@ def main() -> int:
     with make_client(args) as client:
         pk_bill = args.pk_bill.strip() or generat_bill_id(
             client,
-            base_url=args.base_url,
+            base_url=ERM_BASE_URL,
             billtype=args.billtype,
             pk_bill="undefined",
             t_ms=t_ms,
         )
         upload_info = upload_accessory_file(
             client,
-            base_url=args.base_url,
+            base_url=ERM_BASE_URL,
             pk_bill=pk_bill,
             file_path=args.file,
             state=args.state,

@@ -16,7 +16,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from erm_common import DEFAULT_ERM_BASE_URL
+from erm_common import ERM_BASE_URL
 
 ZERO8 = "0.00000000"
 TRADE_TYPE = "264X-Cxx-TYBXD"
@@ -473,11 +473,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="One-file save flow: dispatch-json defaults + payload build + savebill post."
     )
-    parser.add_argument(
-        "--base-url",
-        default=DEFAULT_ERM_BASE_URL,
-        help=f"ERM base URL (default: {DEFAULT_ERM_BASE_URL}).",
-    )
     parser.add_argument("--cookie", required=True, help="Raw Cookie header copied from browser")
     parser.add_argument("--timeout", type=float, default=30.0)
 
@@ -546,7 +541,7 @@ def main() -> int:
     with httpx.Client(headers={"Cookie": args.cookie}, timeout=args.timeout, follow_redirects=True) as client:
         out = post_form(
             client,
-            base_url=args.base_url,
+            base_url=ERM_BASE_URL,
             path="/iwebap/jkbx_maintain_ctr/savebill",
             form=save_form,
         )
