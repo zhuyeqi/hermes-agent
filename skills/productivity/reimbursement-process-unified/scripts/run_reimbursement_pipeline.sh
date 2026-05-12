@@ -69,7 +69,7 @@ step "erm_login_ok"
 # --- Cookie export ---
 if [[ -z "$COOKIE" ]]; then
   step "export_cookies"
-  agent-browser --profile "$PROFILE_DIR" cookies get > cdp_cookies.json
+  agent-browser --profile "$PROFILE_DIR" cookies get --json > cdp_cookies.json
 
   COOKIE="$(python3 "$SKILL_DIR/scripts/build_cookie_header.py" \
     --cookies-json cdp_cookies.json \
@@ -97,8 +97,8 @@ if not u:
 print("Gate.B ok")
 PY
 
-step "capture_dispatch (HAR recording)"
-agent-browser --profile "$PROFILE_DIR" network har start
+step "capture_dispatch (network monitor)"
+agent-browser --profile "$PROFILE_DIR" network requests --clear
 
 ADD_URL="$(python3 - <<'PY'
 import json, os
@@ -118,33 +118,43 @@ PY
 agent-browser --profile "$PROFILE_DIR" open "$ADD_URL"
 agent-browser --profile "$PROFILE_DIR" wait --load networkidle
 
-step "extract_dispatch_from_har"
-agent-browser --profile "$PROFILE_DIR" network har stop /tmp/dispatch.har
+step "extract_dispatch (request detail)"
+agent-browser --profile "$PROFILE_DIR" \
+  network requests --filter "/iwebap/evt/dispatch" --json > /tmp/dispatch_requests.json
+
+DISPATCH_REQ_ID="$(python3 - <<'PY'
+import json
+from pathlib import Path
+
+raw = json.loads(Path("/tmp/dispatch_requests.json").read_text(encoding="utf-8"))
+if isinstance(raw, dict) and "success" in raw:
+    raw = raw.get("data", raw)
+entries = raw if isinstance(raw, list) else raw.get("requests", raw.get("entries", []))
+matches = [e for e in entries if "/iwebap/evt/dispatch" in (e.get("url") or "")]
+if not matches:
+    raise SystemExit(f"Gate.C failed: no /iwebap/evt/dispatch request (total: {len(entries)})")
+req_id = matches[-1].get("requestId") or matches[-1].get("id") or ""
+if not req_id:
+    raise SystemExit("Gate.C failed: dispatch request missing requestId")
+print(req_id)
+PY
+)"
+
+agent-browser --profile "$PROFILE_DIR" \
+  network request "$DISPATCH_REQ_ID" --json > /tmp/dispatch_detail.json
 
 python3 - <<'PY'
 import json
 from pathlib import Path
 
-har = json.loads(Path("/tmp/dispatch.har").read_text(encoding="utf-8"))
-entries = har.get("log", {}).get("entries", [])
+raw = json.loads(Path("/tmp/dispatch_detail.json").read_text(encoding="utf-8"))
+if isinstance(raw, dict) and "success" in raw:
+    raw = raw.get("data", raw)
+body = raw.get("responseBody") or raw.get("content", {}).get("text", "")
+if not body:
+    raise SystemExit("Gate.C failed: dispatch response has empty body")
 
-dispatch_entries = [
-    e for e in entries
-    if "/iwebap/evt/dispatch" in e.get("request", {}).get("url", "")
-]
-
-if not dispatch_entries:
-    raise SystemExit(
-        "Gate.C failed: no /iwebap/evt/dispatch in HAR "
-        f"(total entries: {len(entries)})"
-    )
-
-entry = dispatch_entries[-1]
-body_text = entry.get("response", {}).get("content", {}).get("text", "")
-if not body_text:
-    raise SystemExit("Gate.C failed: dispatch entry has empty response body")
-
-data = json.loads(body_text)
+data = json.loads(body)
 if not isinstance(data, dict) or "dataTables" not in data:
     raise SystemExit("Gate.C failed: dispatch body missing dataTables")
 
@@ -161,6 +171,8 @@ python3 - <<'PY'
 import json
 from pathlib import Path
 d = json.loads(Path("defaults.json").read_text(encoding="utf-8"))
+if "defaults" in d:
+    d = d["defaults"]
 head = d.get("head") or {}
 body = d.get("body") or {}
 missing = []

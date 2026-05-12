@@ -34,27 +34,36 @@ def load_cookie_list(path: str) -> list[dict[str, Any]]:
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     if isinstance(data, list):
         cookies = data
-    elif isinstance(data, dict) and isinstance(data.get("cookies"), list):
-        cookies = data["cookies"]
+    elif isinstance(data, dict):
+        if isinstance(data.get("cookies"), list):
+            cookies = data["cookies"]
+        elif isinstance(data.get("data"), dict) and isinstance(data["data"].get("cookies"), list):
+            cookies = data["data"]["cookies"]
+        else:
+            raise ValueError("cookie JSON must be a list or an object containing a cookies list")
     else:
         raise ValueError("cookie JSON must be a list or an object containing a cookies list")
     return [cookie for cookie in cookies if isinstance(cookie, dict)]
 
 
 def build_header(cookies: list[dict[str, Any]], *, domain_filter: str = "") -> str:
-    parts: list[str] = []
+    ordered: list[tuple[str, str]] = []
     seen: set[str] = set()
     for cookie in cookies:
         name = str(cookie.get("name") or "").strip()
         value = str(cookie.get("value") or "")
         domain = str(cookie.get("domain") or "")
-        if not name or name in seen:
+        if not name:
             continue
         if domain_filter and domain_filter not in domain:
             continue
-        parts.append(f"{name}={value}")
-        seen.add(name)
-    return "; ".join(parts)
+        # Replace earlier entry so the last occurrence wins (active session).
+        if name in seen:
+            ordered = [(n, v) for n, v in ordered if n != name]
+        else:
+            seen.add(name)
+        ordered.append((name, value))
+    return "; ".join(f"{n}={v}" for n, v in ordered)
 
 
 def main() -> int:
