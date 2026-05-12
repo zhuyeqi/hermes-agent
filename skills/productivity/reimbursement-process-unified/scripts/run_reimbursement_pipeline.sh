@@ -11,7 +11,9 @@ set -euo pipefail
 # Optional env:
 #   PROFILE_DIR      - agent-browser profile dir (default: /opt/data/erm-browser-profile)
 #   COOKIE           - raw Cookie header; if unset, auto-exported from profile
-#   ATTACHMENT_FILE  - optional local file path to upload
+#   ATTACHMENT_FILE  - optional single local file path to upload
+#   ATTACHMENT_FILES - optional colon-separated absolute paths for multi-file upload
+#                      (takes precedence over ATTACHMENT_FILE; all files share one accessorybillid)
 #   DRY_RUN          - "1" to only build payload (default: 0)
 #
 # Required args:
@@ -23,6 +25,7 @@ set -euo pipefail
 PROFILE_DIR="${PROFILE_DIR:-/opt/data/erm-browser-profile}"
 COOKIE="${COOKIE:-}"
 ATTACHMENT_FILE="${ATTACHMENT_FILE:-}"
+ATTACHMENT_FILES="${ATTACHMENT_FILES:-}"
 DRY_RUN="${DRY_RUN:-0}"
 
 die() {
@@ -192,26 +195,47 @@ print("Gate.D ok")
 PY
 
 accessorybillid=""
-if [[ -n "$ATTACHMENT_FILE" ]]; then
-  step "upload_attachment"
-  python3 "$SKILL_DIR/scripts/upload_reimbursement_attachment.py" \
-    --cookie "$COOKIE" \
-    --file "$ATTACHMENT_FILE" \
-    > attachment.json
+attachment_files=()
+if [[ -n "$ATTACHMENT_FILES" ]]; then
+  IFS=':' read -r -a attachment_files <<< "$ATTACHMENT_FILES"
+elif [[ -n "$ATTACHMENT_FILE" ]]; then
+  attachment_files=("$ATTACHMENT_FILE")
+fi
 
-  accessorybillid="$(python3 - <<'PY'
-import json
-from pathlib import Path
-obj = json.loads(Path("attachment.json").read_text(encoding="utf-8"))
+if (( ${#attachment_files[@]} > 0 )); then
+  total=${#attachment_files[@]}
+  for idx in "${!attachment_files[@]}"; do
+    f="${attachment_files[$idx]}"
+    [[ -f "$f" ]] || die "attachment not found: $f"
+    step "upload_attachment[$((idx+1))/$total] $f"
+
+    upload_args=( --cookie "$COOKIE" --file "$f" )
+    [[ -n "$accessorybillid" ]] && upload_args+=( --pk-bill "$accessorybillid" )
+
+    out_json="attachment_$((idx+1)).json"
+    python3 "$SKILL_DIR/scripts/upload_reimbursement_attachment.py" \
+      "${upload_args[@]}" > "$out_json"
+
+    bid="$(OUT_JSON="$out_json" python3 - <<'PY'
+import json, os, sys
+obj = json.loads(open(os.environ["OUT_JSON"]).read())
 if not obj.get("ok"):
-    raise SystemExit("Gate.E failed: upload not ok")
+    sys.exit("Gate.E failed: upload not ok")
 bid = obj.get("accessorybillid") or ""
 if not bid:
-    raise SystemExit("Gate.E failed: missing accessorybillid")
+    sys.exit("Gate.E failed: missing accessorybillid")
 print(bid)
 PY
 )"
-  step "attachment_ok accessorybillid=$accessorybillid"
+
+    if [[ -z "$accessorybillid" ]]; then
+      accessorybillid="$bid"
+      cp "$out_json" attachment.json
+    elif [[ "$bid" != "$accessorybillid" ]]; then
+      die "Gate.E failed: accessorybillid drift ($bid vs $accessorybillid)"
+    fi
+  done
+  step "attachment_ok accessorybillid=$accessorybillid files=$total"
 fi
 
 step "save_bill"

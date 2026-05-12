@@ -59,7 +59,7 @@ requires:
 - 摘要/用途：传给 `--zy`。
 - 收支项目显示名：AI 根据 `--zy` 摘要自动推断（见下方"收支项目推断"章节），推断后向你确认；不确定时提供 2-3 个候选项由你选择。
 - 发票类型显示名：传给 `--invoice-type`，通常是 `增值税普通发票` 或 `增值税专用发票`。
-- 附件本地路径：如用户要求上传发票或系统强制附件。
+- 附件本地路径：如用户要求上传发票或系统强制附件。若用户在本次流程中提供了发票图片/PDF/OFD 等发票材料用于解析，解析完成后必须把原始发票文件作为附件上传（见下方"发票附件上传"章节），不要询问是否需要上传。
 
 不要把账号密码、Cookie、token 写入最终回复、提交记录或持久化文档。命令示例中统一用 `'...'` 占位。
 
@@ -94,6 +94,18 @@ AI 在构造命令前，根据 `--zy` 摘要内容自动推断 `--expense-item`�
 注意：
 - 脚本 `--expense-item` 的 `choices=` 校验是最终防线；AI 推断值必须精确匹配字典 key。
 - 近义名称需格外小心，如"研究与发展费" vs "研究与开发费"、"办公费-其他" vs "其他应收款"。
+
+## 发票附件上传
+
+当用户提供发票图片/PDF/OFD 等材料用于解析发票信息时，解析完成后必须把**同一份原始文件**作为附件随单据一起上传。一张单据只有一个 `accessorybillid`（首次 `generatBillId` 返回的 `pk_bill`），同一个 ID 下可挂载多个附件——`run_reimbursement_pipeline.sh` 已内置「首次生成 → 后续复用」逻辑，AI 不要绕过 pipeline 手动串接上传脚本。
+
+- 单文件：`export ATTACHMENT_FILE='/abs/path/invoice.pdf'`
+- 多文件：`export ATTACHMENT_FILES='/abs/path/a.pdf:/abs/path/b.jpg:/abs/path/c.ofd'`（冒号分隔，绝对路径；路径本身禁止包含 `:`）
+- 两者同时设置时以 `ATTACHMENT_FILES` 为准。
+- 直接复用用户提供的原始路径，不要转换、压缩或重命名。
+- 产物：`attachment.json`（首份，兼容旧名）、`attachment_1.json`、`attachment_2.json` …；最终 `accessorybillid` 自动注入保存请求。
+- Gate.E：每个文件必须 `ok=true`，且所有上传返回的 `accessorybillid` 必须一致；任一失败立即停机，不要带着缺附件的单据继续保存。
+- 不要在最终回复中回显 Cookie、token 等敏感信息。
 
 ## 推荐流程（两步）
 
@@ -154,7 +166,8 @@ export PROFILE_DIR="${PROFILE_DIR:-/opt/data/erm-browser-profile}"
 | `SKILL_DIR` | 是 | — | 技能目录路径 |
 | `PROFILE_DIR` | 否 | `/opt/data/erm-browser-profile` | agent-browser profile 目录（持久化登录态） |
 | `COOKIE` | 否 | 自动从 profile 导出 | 手动指定的 Cookie 头；不设则脚本自动导出 |
-| `ATTACHMENT_FILE` | 否 | — | 附件本地路径 |
+| `ATTACHMENT_FILE` | 否 | — | 单附件本地路径 |
+| `ATTACHMENT_FILES` | 否 | — | 多附件绝对路径列表，冒号分隔；与 `ATTACHMENT_FILE` 同时设置时优先生效 |
 | `DRY_RUN` | 否 | `0` | 设为 `1` 仅构造 payload 不提交 |
 
 ## 执行契约（Hard Gates，禁止自由发挥）
