@@ -57,7 +57,7 @@ requires:
 - 税额：传给 `--tax-amount`。
 - 价税合计金额/报销总额：传给 `--vat-amount`。
 - 摘要/用途：传给 `--zy`。
-- 收支项目显示名：传给 `--expense-item`，必须是脚本支持的精确名称。
+- 收支项目显示名：AI 根据 `--zy` 摘要自动推断（见下方"收支项目推断"章节），推断后向你确认；不确定时提供 2-3 个候选项由你选择。
 - 发票类型显示名：传给 `--invoice-type`，通常是 `增值税普通发票` 或 `增值税专用发票`。
 - 附件本地路径：如用户要求上传发票或系统强制附件。
 
@@ -81,6 +81,19 @@ requires:
 ```bash
 SKILL_DIR="<actual-skill-directory>"
 ```
+
+## 收支项目推断
+
+AI 在构造命令前，根据 `--zy` 摘要内容自动推断 `--expense-item`。流程：
+
+1. 读取 `scripts/save_general_reimbursement_from_dispatch.py` 中的 `EXPENSE_ITEM_TO_PK` 字典（68 项），获取完整枚举。
+2. 根据 `--zy` 摘要语义匹配最合适的分类。
+3. 向用户展示推断结果并确认（例如：`根据摘要"出差北京拜访客户"，推断收支项目为"差旅费"，是否正确？`）。
+4. 不确定时提供 2-3 个候选项由用户选择，不要猜测。
+
+注意：
+- 脚本 `--expense-item` 的 `choices=` 校验是最终防线；AI 推断值必须精确匹配字典 key。
+- 近义名称需格外小心，如"研究与发展费" vs "研究与开发费"、"办公费-其他" vs "其他应收款"。
 
 ## 推荐流程（两步）
 
@@ -122,7 +135,7 @@ export PROFILE_DIR="${PROFILE_DIR:-/opt/data/erm-browser-profile}"
   --amount '116.46' \
   --tax-amount '6.99' \
   --vat-amount '123.45' \
-  --expense-item '宣传费' \
+  --expense-item '宣传费' \  # AI 从 EXPENSE_ITEM_TO_PK 推断，推断后需用户确认
   --invoice-type '增值税普通发票' \
   --invoice-no '12345678901234567890'
 ```
