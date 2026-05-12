@@ -6,9 +6,9 @@ set -euo pipefail
 #
 # Required env:
 #   SKILL_DIR  - path to this skill directory
-#   BASE_URL   - ERM base URL, e.g. http://10.83.2.11:8008
 #
 # Optional env:
+#   BASE_URL         - ERM base URL (default: http://10.83.2.11:8008)
 #   PROFILE_DIR      - agent-browser profile dir (default: /opt/data/erm-browser-profile)
 #   COOKIE           - raw Cookie header; if unset, auto-exported from profile
 #   ATTACHMENT_FILE  - optional local file path to upload
@@ -49,7 +49,9 @@ require_env() {
 }
 
 require_env SKILL_DIR
-require_env BASE_URL
+
+BASE_URL="${BASE_URL:-http://10.83.2.11:8008}"
+export BASE_URL
 
 if [[ ! -d "$SKILL_DIR/scripts" ]]; then
   die "SKILL_DIR does not look like the skill directory: $SKILL_DIR"

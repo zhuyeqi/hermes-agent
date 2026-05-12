@@ -16,6 +16,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from erm_common import DEFAULT_ERM_BASE_URL
 
 ZERO8 = "0.00000000"
 TRADE_TYPE = "264X-Cxx-TYBXD"
@@ -474,8 +475,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--base-url",
-        required=True,
-        help="Exact ERM base URL provided by the user/environment. Use it as-is; do not modify it.",
+        default=DEFAULT_ERM_BASE_URL,
+        help=f"ERM base URL (default: {DEFAULT_ERM_BASE_URL}).",
     )
     parser.add_argument("--cookie", required=True, help="Raw Cookie header copied from browser")
     parser.add_argument("--timeout", type=float, default=30.0)

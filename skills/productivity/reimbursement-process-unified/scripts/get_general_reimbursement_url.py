@@ -14,7 +14,7 @@ TRADE_NAME = "通用报销单"
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Get 通用报销单 page URL via iwebap/menu/url using the exact --base-url."
+            "Get 通用报销单 page URL via iwebap/menu/url; --base-url defaults to the verified ERM host."
         )
     )
     add_common_args(parser)
