@@ -1,0 +1,73 @@
+{
+  "dataTables": {
+    "headform": {
+      "rows": [
+        {
+          "data": {
+            "pk_org": {"value": "ORG_PK"},
+            "pk_org_v": {"value": "ORG_V_PK"},
+            "pk_group": {"value": "GROUP_PK"},
+            "pk_fiorg": {"value": "ORG_PK"},
+            "dwbm": {"value": "ORG_PK"},
+            "dwbm_v": {"value": "ORG_V_PK"},
+            "pk_tradetypeid": {"value": "TRADETYPE_PK"},
+            "operator": {"value": "OPERATOR_USERID"},
+            "creator": {"value": "CREATOR_USERID"},
+            "deptid": {"value": "DEPT_PK"},
+            "deptid_v": {"value": "DEPT_V_PK"},
+            "fydeptid": {"value": "DEPT_PK"},
+            "fydeptid_v": {"value": "DEPT_V_PK"},
+            "jkbxr": {"value": "报销人姓名"},
+            "jkbxr_mobile": {"value": "13800000000"},
+            "receiver": {"value": "报销人姓名"},
+            "skyhzh": {"value": "收款账号PK"},
+            "jsfs": {"value": "结算方式PK"},
+            "bzbm": {"value": "CNY"},
+            "bbhl": {"value": "1.00000000"},
+            "pk_payorg": {"value": "ORG_PK"},
+            "pk_payorg_v": {"value": "ORG_V_PK"},
+            "fydwbm": {"value": "ORG_PK"},
+            "fydwbm_v": {"value": "ORG_V_PK"},
+            "zyx11": {"value": "1001ZZ1000000000Y8SJ"},
+            "zyx16": {"value": "false"},
+            "zyx18": {"value": "ZYX18_PK"},
+            "zyx20": {"value": "ZYX20_PK"}
+          }
+        }
+      ]
+    },
+    "body_1arap_bxbusitem": {
+      "rows": [
+        {
+          "data": {
+            "receiver": {"value": "报销人姓名"},
+            "skyhzh": {"value": "收款账号PK"},
+            "szxmid": {"value": "1001A110000000001GO8"}
+          }
+        }
+      ]
+    },
+    "body_1other": {
+      "rows": [
+        {
+          "data": {
+            "receiver": {"value": "报销人姓名"},
+            "skyhzh": {"value": "收款账号PK"},
+            "szxmid": {"value": "1001A110000000001GO8"}
+          }
+        }
+      ]
+    },
+    "body_1bzitem": {
+      "rows": [
+        {
+          "data": {
+            "receiver": {"value": "报销人姓名"},
+            "skyhzh": {"value": "收款账号PK"},
+            "defitem11": {"value": "200.00"}
+          }
+        }
+      ]
+    }
+  }
+}
