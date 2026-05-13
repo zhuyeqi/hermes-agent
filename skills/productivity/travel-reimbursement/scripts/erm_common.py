@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import urllib.parse
 from typing import Any
 
@@ -52,7 +53,7 @@ def post_form(
     form: dict[str, Any],
 ) -> dict[str, Any]:
     url = join_url(base_url, path)
-    print(f"POST {url}")
+    print(f"POST {url}", file=sys.stderr)
     response = client.post(
         url,
         data=form,
@@ -62,8 +63,8 @@ def post_form(
             "Accept": "application/json, text/javascript, */*; q=0.01",
         },
     )
-    print(f"STATUS {response.status_code}")
-    print(f"FINAL_URL {response.url}")
+    print(f"STATUS {response.status_code}", file=sys.stderr)
+    print(f"FINAL_URL {response.url}", file=sys.stderr)
     response.raise_for_status()
     try:
         return response.json()
