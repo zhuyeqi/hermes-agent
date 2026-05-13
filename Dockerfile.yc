@@ -52,7 +52,7 @@ RUN cd web && npm run build && \
 
 # ---------- Python virtualenv ----------
 RUN uv venv && \
-    uv pip install --no-cache-dir -e ".[all]" && \
+    uv pip install --no-cache-dir -e ".[modal,daytona,vercel,messaging,cron,cli,dev,tts-premium,slack,pty,honcho,mcp,homeassistant,sms,acp,voice,dingtalk,feishu,google,bedrock,web]" && \
     uv pip install --no-cache-dir httpx && \
     uv pip install --no-cache-dir pymupdf pymupdf4llm defusedxml "markitdown[pptx]"
 

@@ -40,7 +40,7 @@ require_env SKILL_DIR
 require_env ERM_ACCOUNT
 require_env ITEMS_JSON
 
-ACCOUNT_WORKSPACE="${ACCOUNT_WORKSPACE:-/opt/data/erm-workspace/${ERM_ACCOUNT}}"
+ACCOUNT_WORKSPACE="${ACCOUNT_WORKSPACE}"
 PROFILE_DIR="${PROFILE_DIR:-${ACCOUNT_WORKSPACE}/browser-profile}"
 RUN_DIR="${RUN_DIR:-${ACCOUNT_WORKSPACE}/runs/travel-$(date +%Y%m%d-%H%M%S)}"
 
@@ -57,31 +57,39 @@ ERM_BASE_URL="$(
 export ERM_BASE_URL
 
 # Enforce ACCOUNT_WORKSPACE isolation: ITEMS_JSON and ATTACHMENT_FILES must live inside ACCOUNT_WORKSPACE.
+# ITEMS_JSON and attachment paths are files: `cd file.json` fails, so resolve via dirname + basename.
+canonical_abs_path() {
+  local p="$1"
+  if [[ -d "$p" ]]; then
+    (cd "$p" && pwd -P)
+    return
+  fi
+
+  local dir base
+  dir="$(dirname "$p")"
+  base="$(basename "$p")"
+  if [[ "$dir" == "." ]]; then
+    dir="$(pwd -P)"
+  else
+    [[ -d "$dir" ]] || die "cannot resolve path (missing directory): $p"
+    dir="$(cd "$dir" && pwd -P)"
+  fi
+  printf '%s/%s\n' "$dir" "$base"
+}
+
 validate_workspace_path() {
   local p="$1"
   local what="$2"
   if [[ -z "$p" ]]; then return; fi
-  local rp
-  rp="$(cd "$p" && pwd)" || die "cannot resolve path: $p"
-  local rw
-  rw="$(cd "$ACCOUNT_WORKSPACE" && pwd)" || die "cannot resolve workspace: $ACCOUNT_WORKSPACE"
+  local rp rw
+  rp="$(canonical_abs_path "$p")"
+  rw="$(cd "$ACCOUNT_WORKSPACE" && pwd -P)" || die "cannot resolve workspace: $ACCOUNT_WORKSPACE"
   if [[ "$rp" != "$rw"/* ]]; then
     die "$what path must be inside ACCOUNT_WORKSPACE ($ACCOUNT_WORKSPACE): $p"
   fi
 }
 
 validate_workspace_path "$ITEMS_JSON" "ITEMS_JSON"
-
-# --- Login check ---
-step "check_erm_login"
-agent-browser --profile "$PROFILE_DIR" open "${ERM_BASE_URL}/portal/app/mockapp/login.jsp?lrid=1"
-agent-browser --profile "$PROFILE_DIR" wait --load networkidle
-
-CURRENT_URL="$(agent-browser --profile "$PROFILE_DIR" get url)"
-if echo "$CURRENT_URL" | grep -q "login.jsp"; then
-  die "ERM session expired or not logged in. Login first using: agent-browser --profile $PROFILE_DIR"
-fi
-step "erm_login_ok"
 
 # --- Cookie export ---
 COOKIE="${COOKIE:-}"
@@ -102,7 +110,7 @@ python3 "$SKILL_DIR/scripts/get_travel_reimbursement_url.py" \
   --cookie "$COOKIE" \
   > "$RUN_DIR/menu_url.json"
 
-python3 - <<'PY'
+python3 - <<PY
 import json
 from pathlib import Path
 
@@ -117,7 +125,7 @@ PY
 step "capture_dispatch (network monitor)"
 agent-browser --profile "$PROFILE_DIR" network requests --clear
 
-ADD_URL="$(python3 - <<'PY'
+ADD_URL="$(python3 - <<PY
 import json
 import os
 from pathlib import Path
@@ -161,7 +169,7 @@ PY
 agent-browser --profile "$PROFILE_DIR" \
   network request "$DISPATCH_REQ_ID" --json > /tmp/dispatch_detail.json
 
-python3 - <<'PY'
+python3 - <<PY
 import json
 from pathlib import Path
 
@@ -186,7 +194,7 @@ python3 "$SKILL_DIR/scripts/extract_dispatch_defaults.py" \
   > "$RUN_DIR/defaults.json"
 
 # Gate.D: verify essential defaults exist (head and at least one body table has fields)
-python3 - <<'PY'
+python3 - <<PY
 import json
 from pathlib import Path
 
@@ -271,7 +279,7 @@ python3 "$SKILL_DIR/scripts/save_travel_reimbursement_from_dispatch.py" \
   ${DRY_RUN:+--dry-run} \
   > "$RUN_DIR/save_result.json"
 
-python3 - <<'PY'
+python3 - <<PY
 import json
 from pathlib import Path
 

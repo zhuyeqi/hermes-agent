@@ -63,6 +63,23 @@ requires:
 
 不要把账号密码、Cookie、token 写入最终回复、提交记录或持久化文档。命令示例中统一用 `'...'` 占位。
 
+## AI 文件解析行为规范
+
+当用户提供发票文件（图片/PDF/OFD 等）用于解析时，AI 必须遵循以下流程：
+
+1. 先解析文件获取发票信息（发票号、金额、税额等）
+2. 解析完成后，**必须自动设置 `ATTACHMENT_FILE` 环境变量**，指向用户提供的原始文件路径
+3. 不要询问用户"是否需要上传附件"
+4. 然后继续执行报销流程
+
+```bash
+# AI 解析完文件后，必须设置此环境变量
+export ATTACHMENT_FILE="/workspace/path/to/original-invoice.pdf"
+
+# 然后执行 pipeline
+"$SKILL_DIR/scripts/run_reimbursement_pipeline.sh" ...
+```
+
 ## 脚本位置
 
 本技能自带脚本在 `scripts/`：
@@ -114,18 +131,20 @@ AI 在构造命令前，根据 `--zy` 摘要内容自动推断 `--expense-item`�
 AI 询问用户 ERM 账号和密码（不要询问系统 URL），然后操作浏览器完成登录：
 
 ```bash
-PROFILE_DIR="${PROFILE_DIR:-/opt/data/erm-browser-profile}"
+# Profile 目录：优先使用环境变量，否则默认为技能目录下的 .browser-profile
+PROFILE_DIR="${PROFILE_DIR:-${SKILL_DIR}/.browser-profile}"
 
 # 打开登录页（ERM 主机已写死，勿向用户询问 URL）
 agent-browser --profile "$PROFILE_DIR" open "http://10.83.2.11:8008/portal/app/mockapp/login.jsp?lrid=1"
 agent-browser --profile "$PROFILE_DIR" wait --load networkidle
 
-# AI 使用 snapshot 或 screenshot 观察页面，找到账号和密码输入框
-agent-browser --profile "$PROFILE_DIR" snapshot -i
-# 根据页面结构，填入用户提供的账号密码
-agent-browser --profile "$PROFILE_DIR" fill @e<ref> '<account>'
-agent-browser --profile "$PROFILE_DIR" fill @e<ref> '<password>'
-agent-browser --profile "$PROFILE_DIR" click @e<ref>
+# AI 使用 snapshot 获取页面元素引用，根据返回的真实引用（如 @e7、@e8）操作
+# snapshot -i 返回示例：{"elements": {"7": {"type": "input", "name": "账号", "ref": "@e7"}, ...}}
+SNAPSHOT_OUTPUT=$(agent-browser --profile "$PROFILE_DIR" snapshot -i)
+# 根据页面结构，填入用户提供的账号密码（注意：@e<ref> 需替换为实际元素引用）
+agent-browser --profile "$PROFILE_DIR" fill @e<账号输入框的实际ref> '<account>'
+agent-browser --profile "$PROFILE_DIR" fill @e<密码输入框的实际ref> '<password>'
+agent-browser --profile "$PROFILE_DIR" click @e<登录按钮的实际ref>
 agent-browser --profile "$PROFILE_DIR" wait --load networkidle
 
 # 验证登录成功（页面应跳转，不再包含 login.jsp）
@@ -140,7 +159,8 @@ agent-browser --profile "$PROFILE_DIR" get url
 
 ```bash
 export SKILL_DIR="<actual-skill-directory>"
-export PROFILE_DIR="${PROFILE_DIR:-/opt/data/erm-browser-profile}"
+# Profile 目录：优先使用环境变量，否则默认为技能目录下的 .browser-profile
+export PROFILE_DIR="${PROFILE_DIR:-${SKILL_DIR}/.browser-profile}"
 
 "$SKILL_DIR/scripts/run_reimbursement_pipeline.sh" \
   --zy '摘要及用途' \
@@ -164,7 +184,7 @@ export PROFILE_DIR="${PROFILE_DIR:-/opt/data/erm-browser-profile}"
 | 变量 | 必填 | 默认值 | 说明 |
 |------|------|--------|------|
 | `SKILL_DIR` | 是 | — | 技能目录路径 |
-| `PROFILE_DIR` | 否 | `/opt/data/erm-browser-profile` | agent-browser profile 目录（持久化登录态） |
+| `PROFILE_DIR` | 否 | `${SKILL_DIR}/.browser-profile` | agent-browser profile 目录（持久化登录态） |
 | `COOKIE` | 否 | 自动从 profile 导出 | 手动指定的 Cookie 头；不设则脚本自动导出 |
 | `ATTACHMENT_FILE` | 否 | — | 单附件本地路径 |
 | `ATTACHMENT_FILES` | 否 | — | 多附件绝对路径列表，冒号分隔；与 `ATTACHMENT_FILE` 同时设置时优先生效 |
