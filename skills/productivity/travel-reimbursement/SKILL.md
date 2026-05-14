@@ -67,6 +67,16 @@ mkdir -p "$ACCOUNT_WORKSPACE"/{browser-profile,items,attachments,runs}
 
 仅对缺少 `days` 的 subsidy 条目执行推算。用户确认后，将 `days` 写入 ITEMS_JSON 再进入 §3 pipeline。脚本中 `days` 仍为 `require` 必填——推算发生在脚本执行之前。
 
+### 1.2 预检
+
+执行预检脚本，验证所有输入数据齐全后再进入登录：
+
+```bash
+bash "${SKILL_DIR}/scripts/preflight_check.sh"
+```
+
+退出码 `0` 才进入 §2；失败时按 stderr 提示补全数据后重新执行 §1。
+
 ## 2. 登录
 
 ERM 登录页密码由 JS 客户端加密，**不能用脚本直接 POST**，必须走浏览器或者下方的自动化脚本。
@@ -133,7 +143,7 @@ export DRY_RUN=0   # 设 1 只构造 payload
 
 ## 6. 浏览器边界
 
-- **允许**：登录、cookie 导出、HAR 抓 dispatch、最终核验、极少数 UI 异常确认。
+- **允许**：登录、cookie 导出、极少数 UI 异常确认。
 - **禁止**：dispatch/defaults 缺失时继续提交；猜测系统字段；跨账号共享 cookie/明细/附件；把账号、密码、cookie、token 写入回复、日志、提交记录。
 
 ## 引用
