@@ -51,79 +51,50 @@ mkdir -p "$ACCOUNT_WORKSPACE"/{browser-profile,items,attachments,runs}
   "summary": "北京出差",
   "transports": [{"departure_date":"...","arrival_date":"...","vehicle":"火车（二等座）","invoice_form":"火车电子报销凭证","invoice_no":"T1","amount":"500.00"}],
   "hotels": [],
-  "subsidies": [{"days":2,"tool":"火车","official_car_pickup":"否","hosted_by_counterparty":"否"}]
+  "subsidies": [{"tool":"火车","official_car_pickup":"否","hosted_by_counterparty":"否"}]
 }
 ```
 
-至少包含 `transports` / `hotels` / `subsidies` 之一。
+至少包含 `transports` / `hotels` / `subsidies` 之一。上例中 subsidies 未填 `days`，会按 §1.1 从 transports 日期推算并向你确认。
 
-## 2. 登录（必须走浏览器）
+### 1.1 出差天数推算（subsidies[].days）
 
-ERM 登录页密码由 JS 客户端加密，**不能用脚本直接 POST**。仅在浏览器里完成。
+当 `subsidies[].days` 未提供时，按以下流程确认：
 
-登录表单稳定 selector（来自 HAR 反推，不会变化）：
+1. **有 transports**：展示日期范围 `min(departure_date) ~ max(arrival_date)`，请用户确认出差天数。例如：「行程日期范围：2026-05-04 至 2026-05-22，请确认出差天数。」
+2. **无 transports**：直接向用户索取 `days`，不推算。
+3. **用户已提供 `days`**：跳过推算，使用用户值。
 
-| 元素 | selector |
-|---|---|
-| 账号 | `#userid` |
-| 密码 | `#password` |
-| 登录按钮 | `#submitBtn` |
+仅对缺少 `days` 的 subsidy 条目执行推算。用户确认后，将 `days` 写入 ITEMS_JSON 再进入 §3 pipeline。脚本中 `days` 仍为 `require` 必填——推算发生在脚本执行之前。
 
-### 2.1 先探测：是否已经登录
+## 2. 登录
 
-```bash
-agent-browser --profile "$PROFILE_DIR" cookies get --json > /tmp/erm_cookies.json
-COOKIE=$(python3 "$SKILL_DIR/scripts/build_cookie_header.py" \
-  --cookies-json /tmp/erm_cookies.json \
-  | python3 -c "import json,sys;print(json.load(sys.stdin)['cookie_header'])")
+ERM 登录页密码由 JS 客户端加密，**不能用脚本直接 POST**，必须走浏览器或者下方的自动化脚本。
 
-python3 "$SKILL_DIR/scripts/probe_cookie_context.py" \
-  --cookie "$COOKIE" --probe-msgtype-list > /tmp/erm_probe.json
-cat /tmp/erm_probe.json
-```
-
-判定：`/tmp/erm_probe.json` 里 `msgtype_list_probe.looks_authenticated == true` 即已登录 → **直接跳到 §3**。
-
-### 2.2 浏览器登录（仅在 2.1 判定未登录时执行）
-
-向用户索取账号/密码后：
+### 自动登录脚本
 
 ```bash
-read -r -s -p "ERM userid: " ERM_USERID; echo
-read -r -s -p "ERM password: " ERM_PASSWORD; echo
-
-agent-browser --profile "$PROFILE_DIR" open "http://10.83.2.11:8008/portal/app/mockapp/login.jsp?lrid=1"
-agent-browser --profile "$PROFILE_DIR" wait --load networkidle
-SNAPSHOT_OUTPUT=$(agent-browser --profile "$PROFILE_DIR" snapshot -i)
-agent-browser --profile "$PROFILE_DIR" fill @e<账号输入框的实际ref> '<account>'
-agent-browser --profile "$PROFILE_DIR" fill @e<密码输入框的实际ref> '<password>'
-agent-browser --profile "$PROFILE_DIR" click @e<登录按钮的实际ref>
-agent-browser --profile "$PROFILE_DIR" wait --load networkidle
-
-# 验证登录成功（页面应跳转，不再包含 login.jsp）
-agent-browser --profile "$PROFILE_DIR" get url
-
-unset ERM_USERID ERM_PASSWORD
+"$SKILL_DIR/scripts/login_erm.sh"
 ```
 
-### 2.3 验证登录（两道闸都要过）
+脚本参数：
 
-```bash
-# 闸 1：URL 闸
-URL=$(agent-browser --profile "$PROFILE_DIR" get url)
-echo "$URL" | grep -q login.jsp && { echo "still on login page"; exit 1; }
+| 项 | 必填 | 说明             |
+|---|---|----------------|
+| `SKILL_DIR` | 是 | 当前技能目录绝对路径     |
+| `PROFILE_DIR` | 是 | 浏览器 profile 目录 |
+| `ERM_USERID` | 否 | 缺失时脚本报错退出，需通过环境变量提供 |
+| `ERM_PASSWORD` | 否 | 缺失时脚本报错退出，需通过环境变量提供 |
 
-# 闸 2：cookie probe 闸（重跑 2.1）
-agent-browser --profile "$PROFILE_DIR" cookies get --json > /tmp/erm_cookies.json
-COOKIE=$(python3 "$SKILL_DIR/scripts/build_cookie_header.py" \
-  --cookies-json /tmp/erm_cookies.json \
-  | python3 -c "import json,sys;print(json.load(sys.stdin)['cookie_header'])")
-python3 "$SKILL_DIR/scripts/probe_cookie_context.py" \
-  --cookie "$COOKIE" --probe-msgtype-list \
-  | python3 -c "import json,sys;d=json.load(sys.stdin);sys.exit(0 if d['msgtype_list_probe']['looks_authenticated'] else 1)"
-```
+退出码：`0` = 登录成功（含已登录跳过）；`1` = 登录失败；`2` = 环境缺失或 snapshot 解析失败。
 
-任一闸不过 → 见 `reference/login.md`，按症状走诊断树。**不要在密码错误后自动重试**（避免锁号）。
+脚本自动完成：探测是否已登录 → 未登录则打开浏览器、`snapshot -i` 解析动态 ref、填写凭证 → 双闸验证（URL 不含 login.jsp + cookie probe 认证）。脚本退出码 0 即表示探测和验证均已通过，无需再额外执行 `probe_cookie_context.py` 等探测验证脚本。凭证**绝不写入文件**，用完立即 `unset`。
+
+### 手动调试（仅在脚本失败时使用）
+
+脚本失败时，参考 `reference/login.md` 按症状走诊断树。**不要在密码错误后自动重试**（避免锁号）。
+
+手动步骤参见 git history 中 §2.1–2.3 的历史版本。
 
 ## 3. 执行 pipeline
 
@@ -167,8 +138,8 @@ export DRY_RUN=0   # 设 1 只构造 payload
 
 ## 引用
 
-- `reference/items-schema.md` — 差旅明细 JSON 完整字段映射
-- `reference/login.md` — 登录异常诊断树（密码错、验证码、Session 抢占、cookie 缺）
+- `references/items-schema.md` — 差旅明细 JSON 完整字段映射
+- `references/login.md` — 登录异常诊断树（密码错、验证码、Session 抢占、cookie 缺）
 - `scripts/run_reimbursement_pipeline.sh` — 单入口 orchestrator（内置 Gate A–E）
 - `scripts/probe_cookie_context.py` — Cookie 探针（`--probe-msgtype-list` 用于登录后验证）
 - `scripts/erm_common.py` — `ERM_BASE_URL` 唯一来源

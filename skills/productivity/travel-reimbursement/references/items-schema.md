@@ -43,16 +43,22 @@
 
 ## subsidies[]
 
-| 字段 | 必填 | 写入 | 说明 |
-|---|---|---|---|
-| `days` | 是 | `defitem9` | 出差天数 |
-| `tool` | 是 | `defitem40` | 火车、火车（过夜）、长途巴士、轮船 |
-| `official_car_pickup` | 是 | `defitem36` | 是、否 |
-| `hosted_by_counterparty` | 是 | `defitem37` | 是、否 |
+| 字段 | 必填 | 写入 | 说明                                      |
+|---|---|---|-----------------------------------------|
+| `days` | 是* | `defitem9` | 出差天数。未提供时,基于 transports 日期推算参考值并确认（见下方） |
+| `tool` | 是 | `defitem40` | 火车、火车（过夜）、长途巴士、轮船                       |
+| `official_car_pickup` | 是 | `defitem36` | 是、否                                     |
+| `hosted_by_counterparty` | 是 | `defitem37` | 是、否                                     |
 | `standard` | 否 | 元/天 | 缺省=dispatch `subsidy.defitem11`；两者都缺则报错 |
-| `amount` | 否 | 总金额 | 缺省=`standard × days` |
+| `amount` | 否 | 总金额 | 缺省=`standard × days`                    |
 
 **补贴标准来源优先级**：`subsidies[].amount` > `subsidies[].standard` > `defaults.subsidy.defitem11`。dry-run 输出会标记 `standard_source ∈ {items, dispatch}`，绝不允许硬编码。
+
+**出差天数推算**（`days` 标记为 是* 的含义）：
+
+- Claude 构造 ITEMS_JSON 时若 `days` 缺失且有 transports，展示日期范围供用户参考：`min(departure_date) ~ max(arrival_date)`，由用户告知天数。
+- 无 transports 时直接索取，不推算。
+- 脚本中 `days` 仍为 `require` 必填，推算发生在 Claude 写入 JSON 之前。
 
 ## 最小示例
 
@@ -91,3 +97,5 @@
 ```
 
 更完整的多明细样例见 `har/sample_items.json`。
+
+注：subsidies 中的 `days` 可省略，Claude 会展示 transports 日期范围供你确认（见上方推算规则）。
