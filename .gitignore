@@ -37,6 +37,9 @@ agent-browser/
 *.ppk
 *.pem
 privvy*
+
+# HAR files (HTTP archive, may contain sensitive session data)
+*.har
 images/
 __pycache__/
 hermes_agent.egg-info/
