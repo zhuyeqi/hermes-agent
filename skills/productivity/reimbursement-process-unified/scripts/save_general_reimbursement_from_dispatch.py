@@ -277,13 +277,87 @@ def resolve_expense_item_pk(name: str, override_pk: str = "") -> str:
     return pk
 
 
+INVOICE_REQUIRED_FIELDS = ("amount", "tax_amount", "vat_amount", "invoice_no", "expense_item", "invoice_type")
+
+
+def load_invoices(path: str) -> list[dict[str, str]]:
+    text = Path(path).read_text(encoding="utf-8")
+    invoices = json.loads(text)
+    if not isinstance(invoices, list) or len(invoices) == 0:
+        raise SystemExit(f"--invoices-json must contain a non-empty array, got: {type(invoices).__name__}")
+    for i, inv in enumerate(invoices):
+        missing = [f for f in INVOICE_REQUIRED_FIELDS if f not in inv or not str(inv[f]).strip()]
+        if missing:
+            raise SystemExit(f"invoices[{i}] missing required fields: {', '.join(missing)}")
+    return invoices
+
+
 def require_value(name: str, value: str | None) -> str:
     if value in (None, ""):
         raise SystemExit(f"missing system field {name}; verify --dispatch-json or pass explicit override")
     return str(value)
 
 
-def build_save_form(args: argparse.Namespace, defaults: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+def build_body_row(
+    *,
+    invoice: dict[str, str],
+    shared: dict[str, Any],
+) -> dict[str, Any]:
+    szxmid = resolve_expense_item_pk(invoice["expense_item"])
+    invoice_type_pk = resolve_invoice_type_pk(invoice["invoice_type"])
+    amount = invoice["amount"]
+    tax_amount = invoice["tax_amount"]
+    vat_amount = invoice["vat_amount"]
+    return {
+        "cls": "nc.vo.ep.bx.BXBusItemVO",
+        "paytarget": 0,
+        "receiver": shared["jkbxr"],
+        "skyhzh": shared["skyhzh"],
+        "szxmid": szxmid,
+        "vat_amount": money(vat_amount, 2),
+        "dwbm": shared["pk_org"],
+        "deptid": shared["deptid"],
+        "jkbxr": shared["jkbxr"],
+        "hkbbje": ZERO8,
+        "hkybje": ZERO8,
+        "cjkybje": ZERO8,
+        "groupbbje": ZERO8,
+        "groupzfbbje": ZERO8,
+        "grouphkbbje": ZERO8,
+        "cjkbbje": ZERO8,
+        "groupcjkbbje": ZERO8,
+        "globalhkbbje": ZERO8,
+        "globalzfbbje": ZERO8,
+        "globalcjkbbje": ZERO8,
+        "tablecode": "arap_bxbusitem",
+        "globalbbje": ZERO8,
+        "bzbm": shared["bzbm"],
+        "bbhl": shared["bbhl"],
+        "defitem35": invoice_type_pk,
+        "defitem44": invoice["invoice_no"],
+        "defitem13": shared["defitem13"],
+        "tax_amount": money(tax_amount, 2),
+        "tni_amount": money(amount, 2),
+        "orgtax_amount": money(tax_amount, 2),
+        "orgvat_amount": money(vat_amount, 2),
+        "orgtni_amount": money(amount, 2),
+        "grouptax_amount": ZERO8,
+        "groupvat_amount": ZERO8,
+        "grouptni_amount": ZERO8,
+        "globaltax_amount": ZERO8,
+        "globalvat_amount": ZERO8,
+        "globaltni_amount": ZERO8,
+        "groupbbhl": ZERO8,
+        "globalbbhl": ZERO8,
+        "bbje": money(amount, 2),
+        "ybje": money(amount, 2),
+        "zfybje": money(amount, 8),
+        "zfbbje": money(amount, 8),
+        "amount": money(amount, 2),
+    }
+
+
+def build_save_form(args: argparse.Namespace, defaults: dict[str, Any], invoices: list[dict[str, str]]) -> tuple[dict[str, Any], dict[str, Any]]:
     head_defaults = defaults.get("head", {})
     body_defaults = defaults.get("body", {})
     cookie = parse_cookie_header(args.cookie)
@@ -308,9 +382,6 @@ def build_save_form(args: argparse.Namespace, defaults: dict[str, Any]) -> tuple
     zyx18 = require_value("head.zyx18", args.zyx18 or head_defaults.get("zyx18"))
     zyx20 = require_value("head.zyx20", args.zyx20 or head_defaults.get("zyx20"))
     defitem13 = require_value("body.defitem13", args.defitem13 or body_defaults.get("defitem13"))
-    fjzs = args.fjzs or head_defaults.get("fjzs") or "1"
-    szxmid = resolve_expense_item_pk(args.expense_item, args.szxmid)
-    invoice_type_pk = resolve_invoice_type_pk(args.invoice_type, args.invoice_type_pk)
     pk_payorg = head_defaults.get("pk_payorg") or pk_org
     pk_payorg_v = head_defaults.get("pk_payorg_v") or pk_org_v
     fydwbm = head_defaults.get("fydwbm") or pk_org
@@ -319,22 +390,38 @@ def build_save_form(args: argparse.Namespace, defaults: dict[str, Any]) -> tuple
     djrq = f"{bill_date} 00:00:00"
     creationtime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    shared: dict[str, Any] = {
+        "pk_org": pk_org,
+        "deptid": deptid,
+        "jkbxr": jkbxr,
+        "skyhzh": skyhzh,
+        "bzbm": bzbm,
+        "bbhl": bbhl,
+        "defitem13": defitem13,
+    }
+
+    body_rows = [build_body_row(invoice=inv, shared=shared) for inv in invoices]
+
+    total_amount = money(str(sum(Decimal(inv["amount"]) for inv in invoices)), 2)
+    total_tax = money(str(sum(Decimal(inv["tax_amount"]) for inv in invoices)), 2)
+    total_vat = money(str(sum(Decimal(inv["vat_amount"]) for inv in invoices)), 2)
+
     bill_head = {
         "djrq": djrq,
         "zy": args.zy,
-        "zfbbje": args.amount,
+        "zfbbje": total_amount,
         "cjkbbje": ZERO8,
         "deptid": deptid,
         "fydeptid_v": deptid_v,
         "jkbxr": jkbxr,
         "skyhzh": skyhzh,
-        "fjzs": fjzs,
+        "fjzs": len(invoices),
         "jsfs": jsfs,
         "deptid_v": deptid_v,
         "bzbm": bzbm,
         "bbhl": bbhl,
-        "vat_amount": args.vat_amount,
-        "total": args.amount,
+        "vat_amount": total_vat,
+        "total": total_amount,
         "dwbm": pk_org,
         "fydeptid": deptid,
         "jkbxr_mobile": jkbxr_mobile,
@@ -345,9 +432,9 @@ def build_save_form(args: argparse.Namespace, defaults: dict[str, Any]) -> tuple
         "pk_group": pk_group,
         "pk_fiorg": pk_fiorg,
         "djlxbm": TRADE_TYPE,
-        "bbje": args.amount,
-        "ybje": args.amount,
-        "zfybje": args.amount,
+        "bbje": total_amount,
+        "ybje": total_amount,
+        "zfybje": total_amount,
         "hkybje": ZERO8,
         "hkbbje": ZERO8,
         "djzt": 1,
@@ -381,11 +468,11 @@ def build_save_form(args: argparse.Namespace, defaults: dict[str, Any]) -> tuple
         "zyx20": zyx20,
         "paytarget": 0,
         "receiver": jkbxr,
-        "tax_amount": args.tax_amount,
-        "tni_amount": args.amount,
-        "orgtax_amount": args.tax_amount,
-        "orgvat_amount": args.vat_amount,
-        "orgtni_amount": args.amount,
+        "tax_amount": total_tax,
+        "tni_amount": total_amount,
+        "orgtax_amount": total_tax,
+        "orgvat_amount": total_vat,
+        "orgtni_amount": total_amount,
         "grouptax_amount": ZERO8,
         "groupvat_amount": ZERO8,
         "grouptni_amount": ZERO8,
@@ -395,58 +482,11 @@ def build_save_form(args: argparse.Namespace, defaults: dict[str, Any]) -> tuple
         "creator": creator,
         "creationtime": creationtime,
     }
-    body_row = {
-        "cls": "nc.vo.ep.bx.BXBusItemVO",
-        "paytarget": 0,
-        "receiver": jkbxr,
-        "skyhzh": skyhzh,
-        "szxmid": szxmid,
-        "vat_amount": money(args.vat_amount, 2),
-        "dwbm": pk_org,
-        "deptid": deptid,
-        "jkbxr": jkbxr,
-        "hkbbje": ZERO8,
-        "hkybje": ZERO8,
-        "cjkybje": ZERO8,
-        "groupbbje": ZERO8,
-        "groupzfbbje": ZERO8,
-        "grouphkbbje": ZERO8,
-        "cjkbbje": ZERO8,
-        "groupcjkbbje": ZERO8,
-        "globalhkbbje": ZERO8,
-        "globalzfbbje": ZERO8,
-        "globalcjkbbje": ZERO8,
-        "tablecode": "arap_bxbusitem",
-        "globalbbje": ZERO8,
-        "bzbm": bzbm,
-        "bbhl": bbhl,
-        "defitem35": invoice_type_pk,
-        "defitem44": args.invoice_no,
-        "defitem13": defitem13,
-        "tax_amount": money(args.tax_amount, 2),
-        "tni_amount": money(args.amount, 2),
-        "orgtax_amount": money(args.tax_amount, 2),
-        "orgvat_amount": money(args.vat_amount, 2),
-        "orgtni_amount": money(args.amount, 2),
-        "grouptax_amount": ZERO8,
-        "groupvat_amount": ZERO8,
-        "grouptni_amount": ZERO8,
-        "globaltax_amount": ZERO8,
-        "globalvat_amount": ZERO8,
-        "globaltni_amount": ZERO8,
-        "groupbbhl": ZERO8,
-        "globalbbhl": ZERO8,
-        "bbje": money(args.amount, 2),
-        "ybje": money(args.amount, 2),
-        "zfybje": money(args.amount, 8),
-        "zfbbje": money(args.amount, 8),
-        "amount": money(args.amount, 2),
-    }
     save_form = {
         "tradetype": TRADE_TYPE,
         "pk_billtemplet": args.pk_billtemplet,
         "bill": json.dumps(
-            {"head": bill_head, "body": {"bodys": [body_row]}},
+            {"head": bill_head, "body": {"bodys": body_rows}},
             ensure_ascii=False,
             separators=(",", ":"),
         ),
@@ -463,8 +503,14 @@ def build_save_form(args: argparse.Namespace, defaults: dict[str, Any]) -> tuple
         "pk_fiorg": pk_fiorg,
         "source": "dispatch json",
         "defitem13": defitem13,
-        "expense_item": {"name": args.expense_item, "pk": szxmid},
-        "invoice_type": {"name": args.invoice_type, "pk": invoice_type_pk},
+        "invoices": [
+            {
+                "expense_item": {"name": inv["expense_item"], "pk": resolve_expense_item_pk(inv["expense_item"])},
+                "invoice_type": {"name": inv["invoice_type"], "pk": resolve_invoice_type_pk(inv["invoice_type"])},
+                "invoice_no": inv["invoice_no"],
+            }
+            for inv in invoices
+        ],
     }
     return save_form, resolved
 
@@ -485,25 +531,17 @@ def main() -> int:
     parser.add_argument("--jkbxr-mobile", default="")
     parser.add_argument("--operator", default="", help="Defaults to cookie userid")
     parser.add_argument("--creator", default="", help="Defaults to cookie userid")
-    parser.add_argument("--fjzs", default="")
     parser.add_argument("--bzbm", default="")
     parser.add_argument("--zyx18", default="")
     parser.add_argument("--zyx20", default="")
     parser.add_argument("--bill-date", default="")
     parser.add_argument("--zy", required=True)
-    parser.add_argument("--amount", required=True, help="Invoice amount excluding tax")
-    parser.add_argument("--tax-amount", required=True, help="Invoice tax amount")
-    parser.add_argument("--vat-amount", required=True, help="Invoice total amount including tax")
+    parser.add_argument("--invoices-json", required=True, help="Path to JSON file containing invoice array")
     parser.add_argument("--deptid", default="")
     parser.add_argument("--deptid-v", default="")
     parser.add_argument("--jkbxr", default="")
     parser.add_argument("--skyhzh", default="")
     parser.add_argument("--jsfs", default="")
-    parser.add_argument("--expense-item", required=True, choices=list(EXPENSE_ITEM_TO_PK), help="Expense item display name")
-    parser.add_argument("--szxmid", default="", help="Debug override for expense item pk")
-    parser.add_argument("--invoice-type", required=True, choices=list(INVOICE_TYPE_TO_PK), help="Invoice type display name")
-    parser.add_argument("--invoice-type-pk", default="", help="Debug override for defitem35")
-    parser.add_argument("--invoice-no", required=True, help="defitem44")
     parser.add_argument("--defitem13", default="", help="Override body.defitem13 if needed")
     parser.add_argument("--accessorybillid", default="", help="Attachment bill id entrypoint; uploader can fill this")
     parser.add_argument("--attachment-manifest-json", default="", help="Reserved entrypoint for attachment uploader integration")
@@ -514,7 +552,8 @@ def main() -> int:
 
     dispatch = load_dispatch_json(args.dispatch_json)
     defaults = extract_defaults(dispatch)
-    save_form, resolved = build_save_form(args, defaults)
+    invoices = load_invoices(args.invoices_json)
+    save_form, resolved = build_save_form(args, defaults, invoices)
 
     if args.save_form_out:
         out_path = Path(args.save_form_out)
