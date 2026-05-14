@@ -13,12 +13,13 @@ set -euo pipefail
 #   PROFILE_DIR       - agent-browser profile (default: ${ACCOUNT_WORKSPACE}/browser-profile)
 #   RUN_DIR           - artifact output dir (default: ${ACCOUNT_WORKSPACE}/runs/general-YYYYMMDD-HHMMSS)
 #   COOKIE            - raw Cookie header; if unset, exported from profile after Gate.A
+#   INVOICES_JSON     - path to invoices JSON file (required; forwarded as --invoices-json to save script)
 #   ATTACHMENT_FILE   - optional single local file path
 #   ATTACHMENT_FILES  - optional colon-separated absolute paths (takes precedence)
 #   DRY_RUN           - "1" to only build payload (default: 0)
 #
 # Required args:
-#   --zy --invoices-json <path>
+#   --zy
 #
 # Output artifacts under RUN_DIR:
 #   cdp_cookies.json, menu_url.json, dispatch.json, defaults.json,
@@ -40,6 +41,7 @@ require_env() {
 
 require_env SKILL_DIR
 require_env ERM_ACCOUNT
+require_env INVOICES_JSON
 
 if [[ ! -d "$SKILL_DIR/scripts" ]]; then
   die "SKILL_DIR does not look like the skill directory: $SKILL_DIR"
@@ -298,9 +300,11 @@ save_args=(
   --dispatch-json "$RUN_DIR/dispatch.json"
   --accessorybillid "$accessorybillid"
 )
+# INVOICES_JSON is always passed here; do not add a second --invoices-json via "$@".
 
 python3 "$SKILL_DIR/scripts/save_general_reimbursement_from_dispatch.py" \
   "${save_args[@]}" \
+  --invoices-json "$INVOICES_JSON" \
   "$@" \
   --dry-run > "$RUN_DIR/save_dry_run.json"
 
@@ -313,6 +317,7 @@ fi
 
 python3 "$SKILL_DIR/scripts/save_general_reimbursement_from_dispatch.py" \
   "${save_args[@]}" \
+  --invoices-json "$INVOICES_JSON" \
   "$@" \
   > "$RUN_DIR/save_result.json"
 
