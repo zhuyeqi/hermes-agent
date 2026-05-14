@@ -18,7 +18,7 @@ set -euo pipefail
 #   DRY_RUN           - "1" to only build payload (default: 0)
 #
 # Required args:
-#   --zy --amount --tax-amount --vat-amount --expense-item --invoice-type --invoice-no
+#   --zy --invoices-json <path>
 #
 # Output artifacts under RUN_DIR:
 #   cdp_cookies.json, menu_url.json, dispatch.json, defaults.json,
