@@ -43,6 +43,8 @@ require_env SKILL_DIR
 require_env ERM_ACCOUNT
 require_env INVOICES_JSON
 
+source "${SKILL_DIR}/scripts/resolve_python_env.sh"
+
 if [[ ! -d "$SKILL_DIR/scripts" ]]; then
   die "SKILL_DIR does not look like the skill directory: $SKILL_DIR"
 fi

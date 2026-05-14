@@ -40,6 +40,8 @@ require_env SKILL_DIR
 require_env ERM_ACCOUNT
 require_env ITEMS_JSON
 
+source "${SKILL_DIR}/scripts/resolve_python_env.sh"
+
 ACCOUNT_WORKSPACE="${ACCOUNT_WORKSPACE}"
 PROFILE_DIR="${PROFILE_DIR:-${ACCOUNT_WORKSPACE}/browser-profile}"
 RUN_DIR="${RUN_DIR:-${ACCOUNT_WORKSPACE}/runs/travel-$(date +%Y%m%d-%H%M%S)}"
@@ -146,13 +148,13 @@ agent-browser --profile "$PROFILE_DIR" wait --load networkidle
 
 step "extract_dispatch (request detail)"
 agent-browser --profile "$PROFILE_DIR" \
-  network requests --filter "/iwebap/evt/dispatch" --json > /tmp/dispatch_requests.json
+  network requests --filter "/iwebap/evt/dispatch" --json > "$RUN_DIR/dispatch_requests.json"
 
-DISPATCH_REQ_ID="$(python3 - <<'PY'
+DISPATCH_REQ_ID="$(python3 - <<PY
 import json
 from pathlib import Path
 
-raw = json.loads(Path("/tmp/dispatch_requests.json").read_text(encoding="utf-8"))
+raw = json.loads(Path("$RUN_DIR/dispatch_requests.json").read_text(encoding="utf-8"))
 if isinstance(raw, dict) and "success" in raw:
     raw = raw.get("data", raw)
 entries = raw if isinstance(raw, list) else raw.get("requests", raw.get("entries", []))
@@ -167,13 +169,13 @@ PY
 )"
 
 agent-browser --profile "$PROFILE_DIR" \
-  network request "$DISPATCH_REQ_ID" --json > /tmp/dispatch_detail.json
+  network request "$DISPATCH_REQ_ID" --json > "$RUN_DIR/dispatch_detail.json"
 
 python3 - <<PY
 import json
 from pathlib import Path
 
-raw = json.loads(Path("/tmp/dispatch_detail.json").read_text(encoding="utf-8"))
+raw = json.loads(Path("$RUN_DIR/dispatch_detail.json").read_text(encoding="utf-8"))
 if isinstance(raw, dict) and "success" in raw:
     raw = raw.get("data", raw)
 body = raw.get("responseBody") or raw.get("content", {}).get("text", "")

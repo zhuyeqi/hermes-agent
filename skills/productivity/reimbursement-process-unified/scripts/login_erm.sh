@@ -28,6 +28,8 @@ require_env() {
 require_env SKILL_DIR
 require_env PROFILE_DIR
 
+source "${SKILL_DIR}/scripts/resolve_python_env.sh"
+
 ARTIFACT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/erm-login.XXXXXX")"
 cleanup() { rm -rf "$ARTIFACT_DIR"; }
 trap cleanup EXIT

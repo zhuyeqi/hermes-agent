@@ -21,6 +21,16 @@ for var in SKILL_DIR ERM_ACCOUNT INVOICES_JSON; do
   fi
 done
 
+# Resolve Python env (same as run_reimbursement_pipeline.sh / login_erm.sh)
+if [[ -n "${SKILL_DIR:-}" ]] && [[ -f "${SKILL_DIR}/scripts/resolve_python_env.sh" ]]; then
+  source "${SKILL_DIR}/scripts/resolve_python_env.sh"
+fi
+
+# Phase 1b: httpx import check (after resolve_python_env.sh so correct python3 is on PATH)
+if command -v python3 &>/dev/null && ! python3 -c "import httpx" 2>/dev/null; then
+  errors+=("[FAIL] Phase 1: python3 found but httpx module not available")
+fi
+
 # Helper: resolve to canonical absolute path (same logic as run_reimbursement_pipeline.sh)
 canonical_abs_path() {
   local p="$1"

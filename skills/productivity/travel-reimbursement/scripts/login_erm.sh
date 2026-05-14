@@ -27,6 +27,11 @@ require_env() {
 require_env SKILL_DIR
 require_env PROFILE_DIR
 
+source "${SKILL_DIR}/scripts/resolve_python_env.sh"
+
+_LOGIN_TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/erm-login.XXXXXX")"
+trap 'rm -rf "$_LOGIN_TMPDIR"' EXIT
+
 ERM_BASE_URL="$(
   PYTHONPATH="${SKILL_DIR}/scripts" python3 -c "from erm_common import ERM_BASE_URL; print(ERM_BASE_URL)"
 )"
@@ -37,10 +42,10 @@ ERM_BASE_URL="$(
 # ---------------------------------------------------------------------------
 step "probe_cookie_context"
 
-agent-browser --profile "$PROFILE_DIR" cookies get --json > /tmp/erm_cookies.json
+agent-browser --profile "$PROFILE_DIR" cookies get --json > "$_LOGIN_TMPDIR/erm_cookies.json"
 
 COOKIE="$(python3 "$SKILL_DIR/scripts/build_cookie_header.py" \
-  --cookies-json /tmp/erm_cookies.json 2>/dev/null \
+  --cookies-json "$_LOGIN_TMPDIR/erm_cookies.json" 2>/dev/null \
   | python3 -c "import json,sys; print(json.load(sys.stdin).get('cookie_header',''))" 2>/dev/null \
   || true)"
 
@@ -55,7 +60,7 @@ else
 fi
 
 if [[ "$ALREADY_AUTH" == "True" ]]; then
-  echo "$PROBE_JSON" > /tmp/erm_probe.json
+  echo "$PROBE_JSON" > "$_LOGIN_TMPDIR/erm_probe.json"
   echo '{"status":"already_logged_in"}'
   step "already_logged_in"
   exit 0
@@ -183,9 +188,9 @@ fi
 step "gate1_ok url=$URL"
 
 # Gate 2: cookie probe must confirm authenticated
-agent-browser --profile "$PROFILE_DIR" cookies get --json > /tmp/erm_cookies.json
+agent-browser --profile "$PROFILE_DIR" cookies get --json > "$_LOGIN_TMPDIR/erm_cookies.json"
 COOKIE="$(python3 "$SKILL_DIR/scripts/build_cookie_header.py" \
-  --cookies-json /tmp/erm_cookies.json \
+  --cookies-json "$_LOGIN_TMPDIR/erm_cookies.json" \
   | python3 -c "import json,sys; print(json.load(sys.stdin)['cookie_header'])")"
 
 PROBE_JSON="$(python3 "$SKILL_DIR/scripts/probe_cookie_context.py" \
@@ -202,6 +207,6 @@ fi
 
 step "gate2_ok authenticated"
 
-echo "$PROBE_JSON" > /tmp/erm_probe.json
+echo "$PROBE_JSON" > "$_LOGIN_TMPDIR/erm_probe.json"
 echo '{"status":"logged_in"}'
 step "login_complete"
