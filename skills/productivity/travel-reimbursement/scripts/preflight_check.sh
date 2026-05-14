@@ -8,7 +8,7 @@ set -euo pipefail
 errors=()
 
 # --- Phase 1: Dependencies ---
-for cmd in python3 jq agent-browser; do
+for cmd in python3 agent-browser; do
   if ! command -v "$cmd" &>/dev/null; then
     errors+=("[FAIL] Phase 1: dependency not found: $cmd")
   fi
@@ -68,61 +68,76 @@ fi
 if [[ -n "${ITEMS_JSON:-}" ]]; then
   if [[ ! -f "$ITEMS_JSON" ]]; then
     errors+=("[FAIL] Phase 4: ITEMS_JSON file not found: $ITEMS_JSON")
-  elif ! jq '.' "$ITEMS_JSON" &>/dev/null; then
-    errors+=("[FAIL] Phase 4: $ITEMS_JSON is not valid JSON")
   else
-    # summary
-    if [[ -z "$(jq -r '.summary // empty' "$ITEMS_JSON")" ]]; then
-      errors+=("[FAIL] Phase 4: $ITEMS_JSON: missing required field: summary")
+    _py4_out=$(python3 - "$ITEMS_JSON" 2>&1 <<'PYEOF'
+import json, sys
+
+path = sys.argv[1]
+errs = []
+
+try:
+    with open(path) as f:
+        data = json.load(f)
+except json.JSONDecodeError:
+    print(f"[FAIL] Phase 4: {path} is not valid JSON", file=sys.stderr)
+    sys.exit(0)
+except OSError as e:
+    print(f"[FAIL] Phase 4: {path}: {e}", file=sys.stderr)
+    sys.exit(0)
+
+if not data.get("summary"):
+    errs.append(f"[FAIL] Phase 4: {path}: missing required field: summary")
+
+categories = ["transports", "hotels", "subsidies"]
+has_data = any(isinstance(data.get(c), list) and len(data[c]) > 0 for c in categories)
+if not has_data:
+    errs.append(f"[FAIL] Phase 4: {path}: must contain at least one of transports/hotels/subsidies")
+
+required = {
+    "transports": ["departure_date", "arrival_date", "vehicle", "invoice_form", "invoice_no", "amount"],
+    "hotels": ["city_type", "days", "invoice_type", "invoice_no", "amount"],
+    "subsidies": ["days", "tool", "official_car_pickup", "hosted_by_counterparty"],
+}
+
+for cat, fields in required.items():
+    items = data.get(cat, [])
+    if not isinstance(items, list):
+        continue
+    for i, item in enumerate(items):
+        for field in fields:
+            val = item.get(field)
+            if val is None or (isinstance(val, str) and not val.strip()):
+                errs.append(f"[FAIL] Phase 4: {path}: {cat}[{i}] missing required field: {field}")
+
+for e in errs:
+    print(e, file=sys.stderr)
+PYEOF
+)
+    if [[ -n "$_py4_out" ]]; then
+      while IFS= read -r _line; do
+        errors+=("$_line")
+      done <<< "$_py4_out"
     fi
-
-    # at least one category with entries
-    _has_data=false
-    for _cat in transports hotels subsidies; do
-      _len=$(jq ".$_cat | length" "$ITEMS_JSON" 2>/dev/null || echo 0)
-      if [[ "$_len" -gt 0 ]]; then _has_data=true; break; fi
-    done
-    if [[ "$_has_data" == false ]]; then
-      errors+=("[FAIL] Phase 4: $ITEMS_JSON: must contain at least one of transports/hotels/subsidies")
-    fi
-
-    # transports[] required fields
-    _tc=$(jq '.transports | length' "$ITEMS_JSON" 2>/dev/null || echo 0)
-    for ((_i=0; _i<_tc; _i++)); do
-      for _f in departure_date arrival_date vehicle invoice_form invoice_no amount; do
-        _v=$(jq -r ".transports[$_i].$_f // empty" "$ITEMS_JSON")
-        if [[ -z "$_v" ]]; then
-          errors+=("[FAIL] Phase 4: $ITEMS_JSON: transports[$_i] missing required field: $_f")
-        fi
-      done
-    done
-
-    # hotels[] required fields
-    _hc=$(jq '.hotels | length' "$ITEMS_JSON" 2>/dev/null || echo 0)
-    for ((_i=0; _i<_hc; _i++)); do
-      for _f in city_type days invoice_type invoice_no amount; do
-        _v=$(jq -r ".hotels[$_i].$_f // empty" "$ITEMS_JSON")
-        if [[ -z "$_v" ]]; then
-          errors+=("[FAIL] Phase 4: $ITEMS_JSON: hotels[$_i] missing required field: $_f")
-        fi
-      done
-    done
-
-    # subsidies[] required fields
-    _sc=$(jq '.subsidies | length' "$ITEMS_JSON" 2>/dev/null || echo 0)
-    for ((_i=0; _i<_sc; _i++)); do
-      for _f in days tool official_car_pickup hosted_by_counterparty; do
-        _v=$(jq -r ".subsidies[$_i].$_f // empty" "$ITEMS_JSON")
-        if [[ -z "$_v" ]]; then
-          errors+=("[FAIL] Phase 4: $ITEMS_JSON: subsidies[$_i] missing required field: $_f")
-        fi
-      done
-    done
   fi
 fi
 
 # --- Phase 5: Attachment file existence ---
-if [[ -n "${ATTACHMENT_FILES:-}" ]]; then
+_has_invoices=false
+if [[ -n "${ITEMS_JSON:-}" ]] && [[ -f "${ITEMS_JSON:-}" ]]; then
+  _invoice_count=$(python3 -c "
+import json,sys
+d=json.load(open(sys.argv[1]))
+n=sum(len(d.get(c,[])) for c in('transports','hotels'))
+print(n)
+" "$ITEMS_JSON" 2>/dev/null || echo 0)
+  if [[ "$_invoice_count" -gt 0 ]]; then _has_invoices=true; fi
+fi
+
+if [[ -z "${ATTACHMENT_FILES:-}" ]]; then
+  if [[ "$_has_invoices" == true ]]; then
+    errors+=("[FAIL] Phase 5: ITEMS_JSON has transport/hotel entries but ATTACHMENT_FILES is not set")
+  fi
+else
   IFS=':' read -ra _att_files <<< "$ATTACHMENT_FILES"
   for f in "${_att_files[@]}"; do
     if [[ ! -f "$f" ]]; then

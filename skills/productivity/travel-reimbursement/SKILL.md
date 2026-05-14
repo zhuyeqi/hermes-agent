@@ -67,7 +67,25 @@ mkdir -p "$ACCOUNT_WORKSPACE"/{browser-profile,items,attachments,runs}
 
 仅对缺少 `days` 的 subsidy 条目执行推算。用户确认后，将 `days` 写入 ITEMS_JSON 再进入 §3 pipeline。脚本中 `days` 仍为 `require` 必填——推算发生在脚本执行之前。
 
-### 1.2 预检
+### 1.2 用户提交发票文件时
+
+当用户提供发票文件时，**必须**按顺序执行以下步骤：
+
+1. 用 vision/OCR 解析发票拿到金额、税额、发票号，填入 `ITEMS_JSON`。
+2. **立即**执行文件复制（不要只创建目录）：
+
+```bash
+_att_dir="${ACCOUNT_WORKSPACE}/attachments/$(date +%Y%m%d)_${TAG}"
+mkdir -p "$_att_dir"
+cp /path/from/user/invoice.pdf "$_att_dir/"
+export ATTACHMENT_FILES="$(find "$_att_dir" -type f | paste -sd ':')"
+```
+
+其中 `TAG` 取 `summary` 的简短标识（如 `beijing`），用于区分不同次提交的附件，名称中不含连字符。
+3. 不要询问「是否需要上传附件」——发票即附件，直接进 pipeline。
+4. 多次提交时每次使用不同的 `TAG`，附件目录仅含本次发票，避免与历史文件混淆。
+
+### 1.3 预检
 
 执行预检脚本，验证所有输入数据齐全后再进入登录：
 
@@ -118,13 +136,7 @@ export DRY_RUN=0   # 设 1 只构造 payload
 
 产物全部落在 `$RUN_DIR`：`cdp_cookies.json`、`menu_url.json`、`dispatch.json`、`defaults.json`、`attachment_*.json`、`save_form.json`、`save_result.json`。
 
-## 4. 用户提交发票文件时
-
-1. 用 vision/OCR 解析发票拿到金额、税额、发票号，填入 `ITEMS_JSON`。
-2. **立即**把原始发票文件复制到 `${ACCOUNT_WORKSPACE}/attachments/<date-tag>/` 并 `export ATTACHMENT_FILES=...`。
-3. 不要再问用户「是否需要上传附件」——业务上发票就是附件，直接进 §3。
-
-## 5. 硬闸（pipeline 内置，失败即停机）
+## 4. 硬闸（pipeline 内置，失败即停机）
 
 | Gate | 检查 | 失败动作 |
 |---|---|---|
@@ -141,7 +153,7 @@ export DRY_RUN=0   # 设 1 只构造 payload
 - 补贴 `standard_source ∈ {items, dispatch}`，**绝不可硬编码**
 - `save_result.json.ok == true`
 
-## 6. 浏览器边界
+## 5. 浏览器边界
 
 - **允许**：登录、cookie 导出、极少数 UI 异常确认。
 - **禁止**：dispatch/defaults 缺失时继续提交；猜测系统字段；跨账号共享 cookie/明细/附件；把账号、密码、cookie、token 写入回复、日志、提交记录。

@@ -59,12 +59,7 @@ mkdir -p "$ACCOUNT_WORKSPACE"/{browser-profile,attachments,runs}
 - 获取通用报销单 URL、解析 Cookie、从 dispatch 提取默认值、上传附件、构造并提交保存表单。
 
 只在这些场景使用浏览器（agent-browser `--profile` 模式）：
-- 登录与 session（由 `login_erm.sh` 与 pipeline Gate.A 驱动）。
 - Cookie 导出：`agent-browser --profile $PROFILE_DIR cookies get`。
-- HAR / network 录制：捕获 `/iwebap/evt/dispatch` 响应。
-- 保存后核验或脚本不支持的异常 UI。
-
-不要依赖旧的页面元素 ref。每次浏览器操作前重新观察页面。
 
 ## 前置条件
 

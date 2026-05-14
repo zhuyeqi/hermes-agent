@@ -148,13 +148,14 @@ echo "$valid_items" > "$TMPDIR/items_valid.json"
   rm -rf /tmp/preflight_isolation_test
 )
 
-# T10: all valid, no attachments
+# T10: subsidies only, no attachments (valid — no invoices to attach)
 (
+  echo '{"summary":"x","subsidies":[{"days":1,"tool":"train","official_car_pickup":"no","hosted_by_counterparty":"no"}]}' > "$TMPDIR/subs_only.json"
   export SKILL_DIR="$SCRIPT_DIR"
   export ERM_ACCOUNT="test"
   export ACCOUNT_WORKSPACE="$TMPDIR"
-  export ITEMS_JSON="$TMPDIR/items_valid.json"
-  assert_pass "all valid data"
+  export ITEMS_JSON="$TMPDIR/subs_only.json"
+  assert_pass "subsidies only, no attachments"
 )
 
 # T11: all valid with existing attachment
@@ -166,6 +167,15 @@ echo "$valid_items" > "$TMPDIR/items_valid.json"
   export ITEMS_JSON="$TMPDIR/items_valid.json"
   export ATTACHMENT_FILES="$TMPDIR/receipt.pdf"
   assert_pass "valid with attachment"
+)
+
+# T12: has transport/hotel but no attachments (should fail)
+(
+  export SKILL_DIR="$SCRIPT_DIR"
+  export ERM_ACCOUNT="test"
+  export ACCOUNT_WORKSPACE="$TMPDIR"
+  export ITEMS_JSON="$TMPDIR/items_valid.json"
+  assert_fail "invoices without attachments" "ATTACHMENT_FILES is not set"
 )
 
 # --- Summary ---

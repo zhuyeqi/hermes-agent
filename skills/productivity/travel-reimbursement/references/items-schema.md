@@ -56,7 +56,7 @@
 
 **出差天数推算**（`days` 标记为 是* 的含义）：
 
-- Claude 构造 ITEMS_JSON 时若 `days` 缺失且有 transports，展示日期范围供用户参考：`min(departure_date) ~ max(arrival_date)`，由用户告知天数。
+- 构造 ITEMS_JSON 时若 `days` 缺失且有 transports，展示日期范围供用户参考：`min(departure_date) ~ max(arrival_date)`，由用户告知天数。
 - 无 transports 时直接索取，不推算。
 - 脚本中 `days` 仍为 `require` 必填，推算发生在 Claude 写入 JSON 之前。
 
@@ -98,4 +98,4 @@
 
 更完整的多明细样例见 `har/sample_items.json`。
 
-注：subsidies 中的 `days` 可省略，Claude 会展示 transports 日期范围供你确认（见上方推算规则）。
+注：subsidies 中的 `days` 可省略，会展示 transports 日期范围供你确认（见上方推算规则）。
