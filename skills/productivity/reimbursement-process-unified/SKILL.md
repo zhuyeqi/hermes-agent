@@ -71,13 +71,14 @@ mkdir -p "$ACCOUNT_WORKSPACE"/{browser-profile,attachments,runs}
 
 执行前先确认这些输入：
 - ERM 登录账号和密码（仅用于设置 `ERM_USERID` / `ERM_PASSWORD` 后调用 `login_erm.sh`）。
-- 发票号码：`--invoice-no`。
-- 不含税金额：`--amount`。
-- 税额：`--tax-amount`。
-- 价税合计：`--vat-amount`。
-- 摘要/用途：`--zy`。
-- 收支项目显示名：由 AI 根据 `--zy` 推断（见「收支项目推断」），推断后请用户确认。
-- 发票类型：`--invoice-type`（如 `增值税普通发票`）。
+- 摘要/用途：`--zy`（整张报销单共用）。
+- 发票信息：通过 `--invoices-json` 传入 JSON 文件，每张发票包含：
+  - `amount`：不含税金额。
+  - `tax_amount`：税额。
+  - `vat_amount`：价税合计。
+  - `invoice_no`：发票号码。
+  - `expense_item`：收支项目显示名（AI 推断，见「收支项目推断」，推断后请用户确认）。
+  - `invoice_type`：发票类型（如 `增值税普通发票`）。
 - 附件：若需上传，路径须在 `ACCOUNT_WORKSPACE` 下（见 §1）。
 
 不要把账号密码、Cookie、token 写入最终回复、提交记录或持久化文档。命令示例中统一用 `'...'` 占位。
@@ -119,12 +120,13 @@ export SKILL_DIR="<actual-skill-directory>"
 
 ## 收支项目推断
 
-AI 在构造命令前，根据 `--zy` 自动推断 `--expense-item`：
+AI 在构造 `invoices.json` 前，根据每张发票的 `--zy` 和发票内容自动推断对应的 `expense_item`：
 
 1. 读取 `scripts/save_general_reimbursement_from_dispatch.py` 中的 `EXPENSE_ITEM_TO_PK`。
-2. 语义匹配后向用户确认；不确定时给出 2–3 个候选项。
+2. 对每张发票语义匹配后向用户确认；不确定时给出 2–3 个候选项。
+3. 将确认后的 `expense_item` 写入 `invoices.json` 对应条目。
 
-注意：`--expense-item` 的 `choices=` 为最终防线；推断值须与字典 key 完全一致。
+每张发票的 `expense_item` 可以不同。`resolve_expense_item_pk` 为最终防线；值须与字典 key 完全一致。
 
 ## 发票附件上传
 
@@ -166,14 +168,17 @@ export PROFILE_DIR="${ACCOUNT_WORKSPACE}/browser-profile"
 # 可选：export ATTACHMENT_FILE=... 或 ATTACHMENT_FILES=...
 export DRY_RUN=0
 
+# AI 生成 invoices.json（以下为示例）
+cat > "$ACCOUNT_WORKSPACE/runs/invoices.json" << 'EOF'
+[
+  {"amount":"60","tax_amount":"6","vat_amount":"66","invoice_no":"147258369","expense_item":"党建工作经费","invoice_type":"增值税普通发票"},
+  {"amount":"90","tax_amount":"9","vat_amount":"99","invoice_no":"258369147","expense_item":"办公费-办公用品","invoice_type":"增值税普通发票"}
+]
+EOF
+
 "$SKILL_DIR/scripts/run_reimbursement_pipeline.sh" \
   --zy '摘要及用途' \
-  --amount '116.46' \
-  --tax-amount '6.99' \
-  --vat-amount '123.45' \
-  --expense-item '宣传费' \
-  --invoice-type '增值税普通发票' \
-  --invoice-no '12345678901234567890'
+  --invoices-json "$ACCOUNT_WORKSPACE/runs/invoices.json"
 ```
 
 脚本结束会在 stderr 打印 `Artifacts in: <RUN_DIR>`。该目录内含：
