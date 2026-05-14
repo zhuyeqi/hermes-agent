@@ -45,7 +45,7 @@
 
 | 字段 | 必填 | 写入 | 说明                                      |
 |---|---|---|-----------------------------------------|
-| `days` | 是* | `defitem9` | 出差天数。未提供时,基于 transports 日期推算参考值并确认（见下方） |
+| `days` | 是* | `defitem9` | 出差天数。未提供时须向用户询问，**禁止自行计算或默认填值**（见下方） |
 | `tool` | 是 | `defitem40` | 火车、火车（过夜）、长途巴士、轮船                       |
 | `official_car_pickup` | 是 | `defitem36` | 是、否                                     |
 | `hosted_by_counterparty` | 是 | `defitem37` | 是、否                                     |
@@ -54,11 +54,11 @@
 
 **补贴标准来源优先级**：`subsidies[].amount` > `subsidies[].standard` > `defaults.subsidy.defitem11`。dry-run 输出会标记 `standard_source ∈ {items, dispatch}`，绝不允许硬编码。
 
-**出差天数推算**（`days` 标记为 是* 的含义）：
+**出差天数确认**（`days` 标记为 是* 的含义）：
 
-- 构造 ITEMS_JSON 时若 `days` 缺失且有 transports，展示日期范围供用户参考：`min(departure_date) ~ max(arrival_date)`，由用户告知天数。
-- 无 transports 时直接索取，不推算。
-- 脚本中 `days` 仍为 `require` 必填，推算发生在 Claude 写入 JSON 之前。
+- 构造 ITEMS_JSON 时若 `days` 缺失且有 transports，展示日期范围 `min(departure_date) ~ max(arrival_date)` 供用户参考（仅展示，不做算术），由用户告知天数。**agent 不得自行计算或猜测天数**。
+- 无 transports 时直接向用户索取。
+- 脚本中 `days` 仍为 `require` 必填，询问发生在写入 JSON 之前。
 
 ## 最小示例
 
@@ -98,4 +98,4 @@
 
 更完整的多明细样例见 `har/sample_items.json`。
 
-注：subsidies 中的 `days` 可省略，会展示 transports 日期范围供你确认（见上方推算规则）。
+注：subsidies 中的 `days` 可省略，此时会展示 transports 日期范围供你确认（见上方确认规则），**agent 不会自行填值**。

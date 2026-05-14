@@ -55,17 +55,19 @@ mkdir -p "$ACCOUNT_WORKSPACE"/{browser-profile,items,attachments,runs}
 }
 ```
 
-至少包含 `transports` / `hotels` / `subsidies` 之一。上例中 subsidies 未填 `days`，会按 §1.1 从 transports 日期推算并向你确认。
+至少包含 `transports` / `hotels` / `subsidies` 之一。上例中 subsidies 未填 `days`，须按 §1.1 向用户确认天数。
 
-### 1.1 出差天数推算（subsidies[].days）
+> **禁止 agent 自行计算或猜测 `days` 的值**（包括默认填 1）。`days` 只能来自用户明确告知。
 
-当 `subsidies[].days` 未提供时，按以下流程确认：
+### 1.1 出差天数确认（subsidies[].days）
 
-1. **有 transports**：展示日期范围 `min(departure_date) ~ max(arrival_date)`，请用户确认出差天数。例如：「行程日期范围：2026-05-04 至 2026-05-22，请确认出差天数。」
-2. **无 transports**：直接向用户索取 `days`，不推算。
-3. **用户已提供 `days`**：跳过推算，使用用户值。
+当 `subsidies[].days` 未提供时，**必须向用户询问**，流程如下：
 
-仅对缺少 `days` 的 subsidy 条目执行推算。用户确认后，将 `days` 写入 ITEMS_JSON 再进入 §3 pipeline。脚本中 `days` 仍为 `require` 必填——推算发生在脚本执行之前。
+1. **有 transports**：展示日期范围 `min(departure_date) ~ max(arrival_date)` 供用户参考（仅展示，不做算术），请用户告知出差天数。例如：「行程日期范围：2026-05-04 至 2026-05-22，请确认出差天数。」
+2. **无 transports**：直接向用户索取 `days`。
+3. **用户已提供 `days`**：直接使用，无需再问。
+
+仅对缺少 `days` 的 subsidy 条目执行询问。用户确认后，将 `days` 写入 ITEMS_JSON 再进入 §3 pipeline。脚本中 `days` 仍为 `require` 必填——询问发生在脚本执行之前。
 
 ### 1.2 用户提交发票文件时
 
