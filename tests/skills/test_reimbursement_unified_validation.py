@@ -1,0 +1,132 @@
+"""Tests for reimbursement-process-unified skill validation helpers."""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+SKILL_ROOT = Path(__file__).resolve().parents[2] / "skills/productivity/reimbursement-process-unified"
+SCRIPTS = SKILL_ROOT / "scripts"
+SCRIPT_LIB = SCRIPTS / "lib"
+PYTHONPATH_SKILL = f"{SCRIPT_LIB}:{SCRIPTS}"
+
+sys.path.insert(0, str(SCRIPT_LIB))
+from erm_enums import EXPENSE_ITEM_TO_PK  # noqa: E402
+
+
+def _run_classify(**kwargs: str) -> dict:
+    args = [sys.executable, str(SCRIPTS / "classify_login_failure.py")]
+    for k, v in kwargs.items():
+        args.extend([f"--{k.replace('_', '-')}", v])
+    proc = subprocess.run(args, capture_output=True, text=True, check=True)
+    return json.loads(proc.stdout)
+
+
+def test_classify_wrong_password():
+    out = _run_classify(url="http://x/login.jsp", tip="用户名或密码错误")
+    assert out["error_code"] == "wrong_password"
+
+
+def test_classify_captcha():
+    out = _run_classify(url="http://x/login.jsp", tip="请输入图形验证码")
+    assert out["error_code"] == "captcha_required"
+
+
+def test_validate_invoice_enums_ok(tmp_path):
+    inv = tmp_path / "invoices.json"
+    inv.write_text(
+        json.dumps(
+            [
+                {
+                    "amount": "60",
+                    "tax_amount": "6",
+                    "vat_amount": "66",
+                    "invoice_no": "1",
+                    "expense_item": "党建工作经费",
+                    "invoice_type": "增值税普通发票",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPTS / "validate_invoice_enums.py"), "--invoices-json", str(inv)],
+        cwd=str(SCRIPTS),
+        env={**dict(__import__("os").environ), "PYTHONPATH": PYTHONPATH_SKILL},
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is True
+
+
+def test_validate_invoice_enums_rejects_invoice_alias(tmp_path):
+    inv = tmp_path / "invoices.json"
+    inv.write_text(
+        json.dumps(
+            [
+                {
+                    "amount": "60",
+                    "tax_amount": "6",
+                    "vat_amount": "66",
+                    "invoice_no": "1",
+                    "expense_item": "党建工作经费",
+                    "invoice_type": "普票",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPTS / "validate_invoice_enums.py"), "--invoices-json", str(inv)],
+        cwd=str(SCRIPTS),
+        env={**dict(__import__("os").environ), "PYTHONPATH": PYTHONPATH_SKILL},
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 4
+    err = json.loads(proc.stderr)
+    assert err["error_code"] == "invoice_enum_invalid"
+    assert any(i.get("field") == "invoice_type" for i in err["issues"])
+    assert "allowed_expense_items" in err
+
+
+def test_validate_invoice_enums_rejects_unknown_expense(tmp_path):
+    inv = tmp_path / "invoices.json"
+    inv.write_text(
+        json.dumps(
+            [
+                {
+                    "amount": "60",
+                    "tax_amount": "6",
+                    "vat_amount": "66",
+                    "invoice_no": "1",
+                    "expense_item": "不存在的费用",
+                    "invoice_type": "增值税普通发票",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPTS / "validate_invoice_enums.py"), "--invoices-json", str(inv)],
+        cwd=str(SCRIPTS),
+        env={**dict(__import__("os").environ), "PYTHONPATH": PYTHONPATH_SKILL},
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 4
+    err = json.loads(proc.stderr)
+    assert err["error_code"] == "invoice_enum_invalid"
+    assert err["issues"][0]["field"] == "expense_item"
+    assert "suggestions" in err["issues"][0]
+    allowed = err["allowed_expense_items"]
+    assert len(allowed) >= 1
+    assert set(allowed) == set(EXPENSE_ITEM_TO_PK.keys())
+    assert "党建工作经费" in allowed
+    assert set(err["issues"][0]["suggestions"]).issubset(set(allowed))

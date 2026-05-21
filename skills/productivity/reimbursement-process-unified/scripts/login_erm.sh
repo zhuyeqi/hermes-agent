@@ -13,11 +13,28 @@ set -euo pipefail
 #
 # Exit codes:
 #   0 - login successful (or already logged in)
-#   1 - login failed (wrong password, probe false after submit, etc.)
-#   2 - env missing / ERM_BASE_URL resolve failure / snapshot parse failure
+#   1 - login failed — stderr JSON error_code
+#   2 - env missing / snapshot parse failure
+#   3 - agent-browser daemon failure
 
 die()  { echo "ERROR: $*" >&2; exit 1; }
-die2() { echo "ERROR: $*" >&2; exit 2; }
+die2() {
+  local msg="$*"
+  python3 -c 'import json,sys; print(json.dumps({"ok":false,"error_code":"env_missing","message":sys.argv[1]},ensure_ascii=False),file=sys.stderr)' "$msg" 2>/dev/null \
+    || echo "ERROR: $msg" >&2
+  exit 2
+}
+emit_login_error() {
+  python3 "${ERM_SCRIPT_ROOT}/classify_login_failure.py" \
+    --url "${1:-}" --tip "${2:-}" --page-text "${3:-}" \
+    | python3 -c '
+import json, sys
+obj = json.load(sys.stdin)
+obj["ok"] = False
+print(json.dumps(obj, ensure_ascii=False), file=sys.stderr)
+' || true
+  exit 1
+}
 step() { echo "== step: $*" >&2; }
 
 require_env() {
@@ -27,15 +44,23 @@ require_env() {
 
 require_env SKILL_DIR
 require_env PROFILE_DIR
+export PROFILE_DIR
 
-source "${SKILL_DIR}/scripts/resolve_python_env.sh"
+# shellcheck source=lib/init.sh
+source "${SKILL_DIR}/scripts/lib/init.sh"
+# shellcheck source=lib/resolve_python_env.sh
+source "${ERM_SCRIPT_LIB}/resolve_python_env.sh"
+# shellcheck source=lib/erm_browser.sh
+source "${ERM_SCRIPT_LIB}/erm_browser.sh"
+# shellcheck source=lib/gate_a_session.sh
+source "${ERM_SCRIPT_LIB}/gate_a_session.sh"
 
 ARTIFACT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/erm-login.XXXXXX")"
 cleanup() { rm -rf "$ARTIFACT_DIR"; }
 trap cleanup EXIT
 
 ERM_BASE_URL="$(
-  PYTHONPATH="${SKILL_DIR}/scripts" python3 -c "from erm_common import ERM_BASE_URL; print(ERM_BASE_URL)"
+  python3 -c "from erm_common import ERM_BASE_URL; print(ERM_BASE_URL)"
 )"
 [[ -n "$ERM_BASE_URL" ]] || die2 "failed to resolve ERM_BASE_URL"
 
@@ -44,28 +69,18 @@ ERM_BASE_URL="$(
 # ---------------------------------------------------------------------------
 step "probe_cookie_context"
 
-agent-browser --profile "$PROFILE_DIR" cookies get --json > "$ARTIFACT_DIR/cookies.json"
-
-COOKIE="$(python3 "$SKILL_DIR/scripts/build_cookie_header.py" \
-  --cookies-json "$ARTIFACT_DIR/cookies.json" 2>/dev/null \
-  | python3 -c "import json,sys; print(json.load(sys.stdin).get('cookie_header',''))" 2>/dev/null \
-  || true)"
-
-if [[ -z "$COOKIE" ]]; then
-  step "no_valid_cookie, next step"
-  ALREADY_AUTH="False"
-else
-  PROBE_JSON="$(python3 "$SKILL_DIR/scripts/probe_cookie_context.py" \
-    --cookie "$COOKIE" --probe-msgtype-list)"
-
-  ALREADY_AUTH="$(echo "$PROBE_JSON" | python3 -c "import json,sys;print(json.load(sys.stdin)['msgtype_list_probe']['looks_authenticated'])")"
-fi
-
-if [[ "$ALREADY_AUTH" == "True" ]]; then
-  echo "$PROBE_JSON" > "$ARTIFACT_DIR/probe.json"
+set +e
+gate_a_try_already_logged_in "$ARTIFACT_DIR/cookies.json"
+_probe_rc=$?
+set -e
+if [[ $_probe_rc -eq 0 ]]; then
+  echo "$GATE_A_PROBE_JSON" > "$ARTIFACT_DIR/probe.json"
   echo '{"status":"already_logged_in"}'
   step "already_logged_in"
   exit 0
+fi
+if [[ $_probe_rc -eq 3 ]]; then
+  exit 3
 fi
 
 step "not_authenticated, please provide credentials"
@@ -79,12 +94,14 @@ fi
 # ---------------------------------------------------------------------------
 
 step "open_login_page"
-agent-browser --profile "$PROFILE_DIR" open "${ERM_BASE_URL}/portal/app/mockapp/login.jsp?lrid=1"
-agent-browser --profile "$PROFILE_DIR" wait --load networkidle
+erm_browser_run_chained \
+  "open $(printf '%q' "${ERM_BASE_URL}/portal/app/mockapp/login.jsp?lrid=1")" \
+  "wait --load networkidle" || exit $?
 
 step "snapshot_and_parse_refs"
-SNAPSHOT="$(agent-browser --profile "$PROFILE_DIR" snapshot -i)"
+SNAPSHOT="$(erm_browser_run --profile "$PROFILE_DIR" snapshot -i)" || exit $?
 
+set +e
 REFS="$(echo "$SNAPSHOT" | python3 -c '
 import re, sys, json
 
@@ -140,9 +157,11 @@ print(json.dumps({
     "submit_ref": submit_ref
 }))
 ')"
-
-if [[ $? -ne 0 ]]; then
-  die2 "failed to parse snapshot. Raw output:\n$SNAPSHOT"
+_refs_rc=$?
+set -e
+if [[ $_refs_rc -ne 0 || -z "${REFS:-}" ]]; then
+  python3 -c 'import json,sys; print(json.dumps({"ok":false,"error_code":"snapshot_parse_failed","message":"failed to parse login page snapshot","hint":"见 references/login.md；可 agent-browser close 后重试"},ensure_ascii=False),file=sys.stderr)'
+  exit 2
 fi
 
 USERID_REF="$(echo "$REFS" | python3 -c "import json,sys;print(json.load(sys.stdin)['userid_ref'])")" || die2 "failed to parse refs JSON (userid_ref)"
@@ -151,47 +170,34 @@ SUBMIT_REF="$(echo "$REFS" | python3 -c "import json,sys;print(json.load(sys.std
 
 step "fill_credentials userid_ref=@${USERID_REF} password_ref=@${PASSWORD_REF} submit_ref=@${SUBMIT_REF}"
 
-agent-browser --profile "$PROFILE_DIR" fill "@${USERID_REF}" "$ERM_USERID"
-agent-browser --profile "$PROFILE_DIR" fill "@${PASSWORD_REF}" "$ERM_PASSWORD"
+erm_browser_run_chained \
+  "fill $(printf '%q' "@${USERID_REF}") $(printf '%q' "$ERM_USERID")" \
+  "fill $(printf '%q' "@${PASSWORD_REF}") $(printf '%q' "$ERM_PASSWORD")" \
+  "click $(printf '%q' "@${SUBMIT_REF}")" \
+  "wait --load networkidle" || exit $?
 
 unset ERM_USERID ERM_PASSWORD
 
-step "click_submit"
-agent-browser --profile "$PROFILE_DIR" click "@${SUBMIT_REF}"
-agent-browser --profile "$PROFILE_DIR" wait --load networkidle
+step "click_submit_done"
 
 # ---------------------------------------------------------------------------
-# §2.3 Verify login (two gates)
+# §2.3 Verify login (URL gate + cookie probe)
 # ---------------------------------------------------------------------------
 step "verify_login"
 
-URL="$(agent-browser --profile "$PROFILE_DIR" get url)"
+URL="$(erm_browser_run --profile "$PROFILE_DIR" get url)" || exit $?
 if echo "$URL" | grep -q "login.jsp"; then
-  echo "ERROR: still on login page after submit (url=$URL)" >&2
-  TIP="$(agent-browser --profile "$PROFILE_DIR" get text '#tiplabel' 2>/dev/null || true)"
-  [[ -n "$TIP" ]] && echo "Page error: $TIP" >&2
-  echo "See references/login.md for diagnosis." >&2
-  exit 1
+  TIP="$(erm_browser_run --profile "$PROFILE_DIR" get text '#tiplabel' 2>/dev/null || true)"
+  emit_login_error "$URL" "$TIP" ""
 fi
 
 step "gate1_ok url=$URL"
 
-agent-browser --profile "$PROFILE_DIR" cookies get --json > "$ARTIFACT_DIR/cookies.json"
-COOKIE="$(python3 "$SKILL_DIR/scripts/build_cookie_header.py" \
-  --cookies-json "$ARTIFACT_DIR/cookies.json" \
-  | python3 -c "import json,sys; print(json.load(sys.stdin)['cookie_header'])")"
+gate_a_export_profile_cookies "$ARTIFACT_DIR/cookies.json" || exit $?
+COOKIE="$(gate_a_cookie_from_json "$ARTIFACT_DIR/cookies.json")"
+[[ -n "$COOKIE" ]] || die "failed to build cookie header after login"
 
-PROBE_JSON="$(python3 "$SKILL_DIR/scripts/probe_cookie_context.py" \
-  --cookie "$COOKIE" --probe-msgtype-list)"
-
-AUTH_OK="$(echo "$PROBE_JSON" | python3 -c "import json,sys;print(json.load(sys.stdin)['msgtype_list_probe']['looks_authenticated'])")"
-
-if [[ "$AUTH_OK" != "True" ]]; then
-  echo "ERROR: cookie probe says not authenticated" >&2
-  echo "$PROBE_JSON" >&2
-  echo "See references/login.md for diagnosis." >&2
-  exit 1
-fi
+PROBE_JSON="$(gate_a_require_authenticated "$COOKIE" "Re-login required — cookie probe failed after leaving login page; see references/login.md")"
 
 step "gate2_ok authenticated"
 

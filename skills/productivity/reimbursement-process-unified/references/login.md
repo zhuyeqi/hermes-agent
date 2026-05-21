@@ -24,6 +24,12 @@ agent-browser --profile "$PROFILE_DIR" close
 
 然后重新运行 `login_erm.sh`。很多页面加载异常、snapshot 获取失败、元素找不到的问题都能通过重启浏览器解决。
 
+### 退出码 3：浏览器 daemon / 基础设施（含开头已登录探针）
+
+脚本开头通过 `gate_a_try_already_logged_in` 从 profile 导出 cookie 并做 HTTP 探针。若 `agent-browser` daemon 不可用（与 pipeline Gate.A / preflight Phase 1c 相同），**直接 exit 3**，stderr 为 `browser_daemon_error` JSON，**不会**进入账号密码登录流程。
+
+处理：对 `PROFILE_DIR` 执行 `agent-browser --profile "$PROFILE_DIR" close`，确认 daemon 正常后重跑；勿改发票 JSON 或换 profile 碰运气。详见 `references/errors.md`。
+
 ### 退出码 2：snapshot 解析失败
 
 stderr 会输出原始 snapshot。排查：
@@ -47,7 +53,9 @@ URL 已跳转但 probe 返回 `looks_authenticated=false`：
 
 ### pipeline 报 Gate.A：cookie probe 未认证
 
-说明 profile 中会话与 HTTP 探针不一致。先运行 `login_erm.sh` 再跑 `run_reimbursement_pipeline.sh`。确认 `PROFILE_DIR` 与登录脚本使用的是同一目录。
+说明 profile 中无有效 Cookie 或 HTTP 探针未通过。先运行 `login_erm.sh` 再跑 `run_reimbursement_pipeline.sh`。确认 `PROFILE_DIR` 与登录脚本使用的是同一目录。
+
+pipeline 的 Gate.A **不会**打开 `login.jsp`（仅 `cookies get` + HTTP 探针），与登录脚本的浏览器导航无关。
 
 ## 重试策略
 

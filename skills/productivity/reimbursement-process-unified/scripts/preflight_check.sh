@@ -14,6 +14,20 @@ for cmd in python3 agent-browser; do
   fi
 done
 
+# --- Phase 1c: Browser daemon health (needs PROFILE_DIR when set) ---
+if command -v agent-browser &>/dev/null && [[ -n "${SKILL_DIR:-}" ]]; then
+  ACCOUNT_WORKSPACE_EARLY="${ACCOUNT_WORKSPACE:-$PWD/${ERM_ACCOUNT:-}}"
+  PROFILE_DIR_EARLY="${PROFILE_DIR:-${ACCOUNT_WORKSPACE_EARLY}/browser-profile}"
+  if ! SKILL_DIR="$SKILL_DIR" PROFILE_DIR="$PROFILE_DIR_EARLY" bash "${SKILL_DIR}/scripts/check_browser_health.sh" >/dev/null 2>"${TMPDIR:-/tmp}/erm-preflight-browser.$$.json"; then
+    _bh_msg="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("message","browser health check failed"))' "${TMPDIR:-/tmp}/erm-preflight-browser.$$.json" 2>/dev/null || echo "browser health check failed")"
+    errors+=("[FAIL] Phase 1c: $_bh_msg (see stderr JSON from check_browser_health.sh)")
+    cat "${TMPDIR:-/tmp}/erm-preflight-browser.$$.json" >&2 2>/dev/null || true
+    rm -f "${TMPDIR:-/tmp}/erm-preflight-browser.$$.json"
+  else
+    rm -f "${TMPDIR:-/tmp}/erm-preflight-browser.$$.json"
+  fi
+fi
+
 # --- Phase 2: Required environment variables ---
 for var in SKILL_DIR ERM_ACCOUNT INVOICES_JSON; do
   if [[ -z "${!var:-}" ]]; then
@@ -22,8 +36,11 @@ for var in SKILL_DIR ERM_ACCOUNT INVOICES_JSON; do
 done
 
 # Resolve Python env (same as run_reimbursement_pipeline.sh / login_erm.sh)
-if [[ -n "${SKILL_DIR:-}" ]] && [[ -f "${SKILL_DIR}/scripts/resolve_python_env.sh" ]]; then
-  source "${SKILL_DIR}/scripts/resolve_python_env.sh"
+if [[ -n "${SKILL_DIR:-}" ]] && [[ -f "${SKILL_DIR}/scripts/lib/init.sh" ]]; then
+  # shellcheck source=lib/init.sh
+  source "${SKILL_DIR}/scripts/lib/init.sh"
+  # shellcheck source=lib/resolve_python_env.sh
+  source "${ERM_SCRIPT_LIB}/resolve_python_env.sh"
 fi
 
 # Phase 1b: httpx import check (after resolve_python_env.sh so correct python3 is on PATH)
@@ -128,6 +145,18 @@ PYEOF
         [[ -n "${_line:-}" ]] && errors+=("$_line")
       done <<< "$_py4_out"
     fi
+  fi
+fi
+
+# --- Phase 4b: Enum validation (expense_item / invoice_type) ---
+if [[ -n "${INVOICES_JSON:-}" ]] && [[ -f "${INVOICES_JSON:-}" ]] && [[ -n "${SKILL_DIR:-}" ]]; then
+  if ! python3 "${SKILL_DIR}/scripts/validate_invoice_enums.py" \
+    --invoices-json "$INVOICES_JSON" 2>"${TMPDIR:-/tmp}/erm-preflight-enums.$$.json"; then
+    errors+=("[FAIL] Phase 4b: invoice enum validation failed (expense_item / invoice_type)")
+    cat "${TMPDIR:-/tmp}/erm-preflight-enums.$$.json" >&2 2>/dev/null || true
+    rm -f "${TMPDIR:-/tmp}/erm-preflight-enums.$$.json"
+  else
+    rm -f "${TMPDIR:-/tmp}/erm-preflight-enums.$$.json"
   fi
 fi
 

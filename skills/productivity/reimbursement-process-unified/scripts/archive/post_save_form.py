@@ -1,3 +1,4 @@
+# ARCHIVED — not used by preflight/login/pipeline. See scripts/archive/README.md.
 from __future__ import annotations
 
 """Post a prebuilt ERM savebill form.

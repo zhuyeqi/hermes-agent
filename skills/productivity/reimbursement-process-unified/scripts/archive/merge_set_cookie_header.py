@@ -1,3 +1,4 @@
+# ARCHIVED — not used by preflight/login/pipeline. See scripts/archive/README.md.
 from __future__ import annotations
 
 """Merge login response Set-Cookie headers into a raw Cookie request header.

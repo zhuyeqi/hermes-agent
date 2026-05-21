@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Single-entry orchestrator for the general reimbursement skill.
-# ERM host: single source of truth in scripts/erm_common.py (ERM_BASE_URL).
+# ERM host: single source of truth in scripts/lib/erm_common.py (ERM_BASE_URL).
 #
 # Required env:
 #   SKILL_DIR    - path to this skill directory
@@ -43,7 +43,14 @@ require_env SKILL_DIR
 require_env ERM_ACCOUNT
 require_env INVOICES_JSON
 
-source "${SKILL_DIR}/scripts/resolve_python_env.sh"
+# shellcheck source=lib/init.sh
+source "${SKILL_DIR}/scripts/lib/init.sh"
+# shellcheck source=lib/resolve_python_env.sh
+source "${ERM_SCRIPT_LIB}/resolve_python_env.sh"
+# shellcheck source=lib/erm_browser.sh
+source "${ERM_SCRIPT_LIB}/erm_browser.sh"
+# shellcheck source=lib/gate_a_session.sh
+source "${ERM_SCRIPT_LIB}/gate_a_session.sh"
 
 if [[ ! -d "$SKILL_DIR/scripts" ]]; then
   die "SKILL_DIR does not look like the skill directory: $SKILL_DIR"
@@ -61,7 +68,7 @@ mkdir -p "$RUN_DIR"
 export RUN_DIR
 
 ERM_BASE_URL="$(
-  PYTHONPATH="${SKILL_DIR}/scripts" python3 -c "from erm_common import ERM_BASE_URL; print(ERM_BASE_URL)"
+  python3 -c "from erm_common import ERM_BASE_URL; print(ERM_BASE_URL)"
 )"
 [[ -n "$ERM_BASE_URL" ]] || die "failed to resolve ERM_BASE_URL from erm_common.py"
 export ERM_BASE_URL
@@ -97,35 +104,21 @@ validate_workspace_path() {
   fi
 }
 
-# --- Gate.A: URL + cookie probe (session must be valid in PROFILE_DIR) ---
-step "check_erm_login"
-agent-browser --profile "$PROFILE_DIR" open "${ERM_BASE_URL}/portal/app/mockapp/login.jsp?lrid=1"
-agent-browser --profile "$PROFILE_DIR" wait --load networkidle
-
-CURRENT_URL="$(agent-browser --profile "$PROFILE_DIR" get url)"
-if echo "$CURRENT_URL" | grep -q "login.jsp"; then
-  die "Gate.A failed: not logged in (still on login.jsp). Run: ERM_USERID=... ERM_PASSWORD=... \"$SKILL_DIR/scripts/login_erm.sh\" (see references/login.md)"
+# --- Enum precheck (must match preflight Phase 4b; no post-save validation) ---
+step "validate_invoice_enums"
+if ! python3 "${ERM_SCRIPT_ROOT}/validate_invoice_enums.py" \
+  --invoices-json "$INVOICES_JSON"; then
+  die "invoice enum precheck failed — fix INVOICES_JSON and run preflight_check.sh (see references/errors.md)"
 fi
 
-if [[ -z "$COOKIE" ]]; then
-  step "export_cookies"
-  agent-browser --profile "$PROFILE_DIR" cookies get --json > "$RUN_DIR/cdp_cookies.json"
-
-  COOKIE="$(python3 "$SKILL_DIR/scripts/build_cookie_header.py" \
-    --cookies-json "$RUN_DIR/cdp_cookies.json" \
-    | python3 -c "import json,sys; print(json.load(sys.stdin)['cookie_header'])")"
-  [[ -n "$COOKIE" ]] || die "failed to build cookie header from profile"
-fi
-
-step "gate_a_cookie_probe"
-PROBE_JSON="$(python3 "$SKILL_DIR/scripts/probe_cookie_context.py" \
-  --cookie "$COOKIE" --probe-msgtype-list)"
-AUTH_OK="$(echo "$PROBE_JSON" | python3 -c "import json,sys;print(json.load(sys.stdin)['msgtype_list_probe']['looks_authenticated'])")"
-if [[ "$AUTH_OK" != "True" ]]; then
-  echo "Gate.A failed: cookie probe not authenticated" >&2
-  echo "$PROBE_JSON" >&2
-  die "Re-login with: ERM_USERID=... ERM_PASSWORD=... \"$SKILL_DIR/scripts/login_erm.sh\""
-fi
+# --- Gate.A: cookie export + HTTP probe (lib/gate_a_session.sh) ---
+step "gate_a_session"
+export PROFILE_DIR
+COOKIE="$(gate_a_ensure_cookie "$RUN_DIR/cdp_cookies.json")" \
+  || die "Gate.A failed: no cookies in profile — run login_erm.sh first (see references/login.md)"
+export COOKIE
+gate_a_require_authenticated "$COOKIE" \
+  "Re-login with: ERM_USERID=... ERM_PASSWORD=... \"${SKILL_DIR}/scripts/login_erm.sh\"" >/dev/null
 step "gate_a_ok"
 
 # --- Attachment paths must live under ACCOUNT_WORKSPACE ---
@@ -143,7 +136,7 @@ done
 # --- Pipeline ---
 
 step "get_general_reimbursement_url"
-python3 "$SKILL_DIR/scripts/get_general_reimbursement_url.py" \
+python3 "${ERM_SCRIPT_ROOT}/get_general_reimbursement_url.py" \
   --cookie "$COOKIE" \
   > "$RUN_DIR/menu_url.json"
 
@@ -162,8 +155,6 @@ print("Gate.B ok")
 PY
 
 step "capture_dispatch (network monitor)"
-agent-browser --profile "$PROFILE_DIR" network requests --clear
-
 ADD_URL="$(python3 - <<PY
 import json
 import os
@@ -181,12 +172,15 @@ print(urljoin(base_url.rstrip("/") + "/", url))
 PY
 )"
 
-agent-browser --profile "$PROFILE_DIR" open "$ADD_URL"
-agent-browser --profile "$PROFILE_DIR" wait --load networkidle
+# Chained browser steps: one daemon session; use "load" not "networkidle" (ERM SPA rarely goes idle).
+erm_browser_run_chained \
+  "network requests --clear" \
+  "open $(printf '%q' "$ADD_URL")" \
+  "wait --load load" || exit $?
 
 step "extract_dispatch (request detail)"
-agent-browser --profile "$PROFILE_DIR" \
-  network requests --filter "/iwebap/evt/dispatch" --json > "$RUN_DIR/dispatch_requests.json"
+erm_browser_run --profile "$PROFILE_DIR" \
+  network requests --filter "/iwebap/evt/dispatch" --json > "$RUN_DIR/dispatch_requests.json" || exit $?
 
 DISPATCH_REQ_ID="$(python3 - <<PY
 import json
@@ -208,8 +202,8 @@ print(req_id)
 PY
 )"
 
-agent-browser --profile "$PROFILE_DIR" \
-  network request "$DISPATCH_REQ_ID" --json > "$RUN_DIR/dispatch_detail.json"
+erm_browser_run --profile "$PROFILE_DIR" \
+  network request "$DISPATCH_REQ_ID" --json > "$RUN_DIR/dispatch_detail.json" || exit $?
 
 python3 - <<PY
 import json
@@ -233,7 +227,7 @@ print("Gate.C ok")
 PY
 
 step "extract_dispatch_defaults"
-python3 "$SKILL_DIR/scripts/extract_dispatch_defaults.py" \
+python3 "${ERM_SCRIPT_ROOT}/extract_dispatch_defaults.py" \
   --dispatch-json "$RUN_DIR/dispatch.json" \
   > "$RUN_DIR/defaults.json"
 
@@ -271,7 +265,7 @@ if (( ${#attachment_files[@]} > 0 )); then
     [[ -n "$accessorybillid" ]] && upload_args+=( --pk-bill "$accessorybillid" )
 
     out_json="$RUN_DIR/attachment_$((idx+1)).json"
-    python3 "$SKILL_DIR/scripts/upload_reimbursement_attachment.py" \
+    python3 "${ERM_SCRIPT_ROOT}/upload_reimbursement_attachment.py" \
       "${upload_args[@]}" > "$out_json"
 
     bid="$(OUT_JSON="$out_json" python3 - <<'PY'
@@ -304,7 +298,7 @@ save_args=(
 )
 # INVOICES_JSON is always passed here; do not add a second --invoices-json via "$@".
 
-python3 "$SKILL_DIR/scripts/save_general_reimbursement_from_dispatch.py" \
+python3 "${ERM_SCRIPT_ROOT}/save_general_reimbursement_from_dispatch.py" \
   "${save_args[@]}" \
   --invoices-json "$INVOICES_JSON" \
   "$@" \
@@ -317,7 +311,7 @@ if [[ "$DRY_RUN" == "1" ]]; then
   exit 0
 fi
 
-python3 "$SKILL_DIR/scripts/save_general_reimbursement_from_dispatch.py" \
+python3 "${ERM_SCRIPT_ROOT}/save_general_reimbursement_from_dispatch.py" \
   "${save_args[@]}" \
   --invoices-json "$INVOICES_JSON" \
   "$@" \

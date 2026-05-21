@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from erm_common import ERM_BASE_URL
+from erm_enums import EXPENSE_ITEM_TO_PK, INVOICE_TYPE_TO_PK
 
 ZERO8 = "0.00000000"
 TRADE_TYPE = "264X-Cxx-TYBXD"
@@ -63,80 +64,6 @@ BODY_FIELDS = (
     "defitem13",
     "paytarget",
 )
-
-INVOICE_TYPE_TO_PK: dict[str, str] = {
-    "增值税专用发票": "1001ZZ1000000000SQ9Z",
-    "增值税普通发票": "1001ZZ1000000000SQA1",
-}
-
-EXPENSE_ITEM_TO_PK: dict[str, str] = {
-    "业务招待费": "1001A110000000001GO7",
-    "中介机构费用-其它": "1001A110000000001GPF",
-    "中介机构费用-审计费": "1001A110000000001GPC",
-    "中介机构费用-律师代理费": "1001A110000000001GPE",
-    "中介机构费用-评估费": "1001A110000000001GPD",
-    "中介机构费用-评审费": "1001A110000000001GPB",
-    "交通费-公务交通费": "1001A110000000001GPX",
-    "交通费-车辆运营使用费": "1001A110000000001GPQ",
-    "会议费": "1001A110000000001GOB",
-    "低值易耗品-IT类": "1001A110000000002UWV",
-    "低值易耗品-其他": "1001A110000000002UWW",
-    "保险费": "1001A110000000001GS2",
-    "修理费": "1001A110000000001GO6",
-    "党建工作经费": "1001A110000000001GRX",
-    "其他应付款-其他": "1001A110000000002YN1",
-    "其他应收款": "1001A110000000001GOU",
-    "出国人员经费": "1001A110000000001GOZ",
-    "办公费-信息化运维费": "1001A110000000001GPL",
-    "办公费-信息资讯费": "1001A110000000001GPO",
-    "办公费-其他": "1001A110000000001GPI",
-    "办公费-办公用品": "1001A110000000001GPH",
-    "办公费-印刷费": "1001A110000000001GS6",
-    "办公费-报刊费": "1001A110000000001GPK",
-    "办公费-电话费": "1001A110000000001GPM",
-    "办公费-网络费": "1001A110000000001GPJ",
-    "办公费-邮寄费": "1001A110000000001GPN",
-    "咨询费": "1001A110000000001GOC",
-    "固定资产-硬件设备": "1001A110000000001GOJ",
-    "固定资产-运输设备": "1001A110000000001GOI",
-    "固定资产-非生产管理用工设备及器具": "1001A110000000001GOH",
-    "外部劳务费": "1001A110000000001GOF",
-    "宣传费": "1001A110000000001GO9",
-    "差旅费": "1001A110000000001GO8",
-    "无形资产": "1001A110000000001GOX",
-    "水费": "1001A110000000001GOW",
-    "物业管理费": "1001A110000000001GOE",
-    "电费": "1001A110000000001GOA",
-    "研究与发展费": "1001A110000000001GS5",
-    "研究与开发费": "1001A110000000001GOY",
-    "租赁费": "1001A110000000001GOD",
-    "职工薪酬-住房公积金": "1001A110000000001I9J",
-    "职工薪酬-住房费用": "1001A110000000001I9I",
-    "职工薪酬-工会经费": "1001A110000000001GP1",
-    "职工薪酬-工资-企业负责人薪酬": "1001A110000000002YMR",
-    "职工薪酬-工资-员工工资": "1001A110000000002YMQ",
-    "职工薪酬-社会保险费用-其他": "1001A110000000002YN0",
-    "职工薪酬-社会保险费用-基本养老保险": "1001A110000000002YMT",
-    "职工薪酬-社会保险费用-基本医疗保险": "1001A110000000002YMV",
-    "职工薪酬-社会保险费用-失业保险": "1001A110000000002YMX",
-    "职工薪酬-社会保险费用-工伤保险": "1001A110000000002YMY",
-    "职工薪酬-社会保险费用-生育保险": "1001A110000000002YMZ",
-    "职工薪酬-社会保险费用-补充养老保险（企业年金）": "1001A110000000002YMU",
-    "职工薪酬-社会保险费用-补充医疗保险": "1001A110000000002YMW",
-    "职工薪酬-福利费用-供暖费": "1001A110000000001GP8",
-    "职工薪酬-福利费用-公用药费": "1001A110000000001GP4",
-    "职工薪酬-福利费用-其他": "1001A110000000001GP7",
-    "职工薪酬-福利费用-理发费": "1001W21000000001MX71",
-    "职工薪酬-福利费用-职工体检费": "1001A110000000001GP6",
-    "职工薪酬-福利费用-职工食堂": "1001A110000000001GP9",
-    "职工薪酬-福利费用-防暑降温费": "1001A110000000001GP5",
-    "职工薪酬-职工教育经费": "1001A110000000001GP2",
-    "职工薪酬-雇主责任保险费": "1001A110000000001GO5",
-    "董事会费": "1001A110000000001GOV",
-    "诉讼费": "1001A110000000001GS3",
-    "金融机构手续费": "1001A110000000001ZN1",
-}
-
 
 def print_json(data: Any) -> None:
     print(json.dumps(data, ensure_ascii=False, indent=2))
@@ -259,22 +186,29 @@ def money(value: str, places: int) -> str:
     return f"{Decimal(value):.{places}f}"
 
 
-def resolve_invoice_type_pk(name: str, override_pk: str = "") -> str:
+def lookup_invoice_type_pk(name: str, override_pk: str = "") -> str:
+    """Map display name to PK. Enum validity is enforced in preflight (validate_invoice_enums.py)."""
     if override_pk.strip():
         return override_pk.strip()
-    pk = INVOICE_TYPE_TO_PK.get(name.strip())
-    if not pk:
-        raise ValueError(f"unsupported invoice type: {name!r}; supported={', '.join(INVOICE_TYPE_TO_PK)}")
-    return pk
+    key = name.strip()
+    try:
+        return INVOICE_TYPE_TO_PK[key]
+    except KeyError:
+        raise SystemExit(
+            f"invoice_type {key!r} not in dictionary — run preflight_check.sh (Phase 4b) before save"
+        ) from None
 
 
-def resolve_expense_item_pk(name: str, override_pk: str = "") -> str:
+def lookup_expense_item_pk(name: str, override_pk: str = "") -> str:
     if override_pk.strip():
         return override_pk.strip()
-    pk = EXPENSE_ITEM_TO_PK.get(name.strip())
-    if not pk:
-        raise ValueError(f"unsupported expense item: {name!r}; supported={', '.join(EXPENSE_ITEM_TO_PK)}")
-    return pk
+    key = name.strip()
+    try:
+        return EXPENSE_ITEM_TO_PK[key]
+    except KeyError:
+        raise SystemExit(
+            f"expense_item {key!r} not in dictionary — run preflight_check.sh (Phase 4b) before save"
+        ) from None
 
 
 INVOICE_REQUIRED_FIELDS = ("amount", "tax_amount", "vat_amount", "invoice_no", "expense_item", "invoice_type")
@@ -303,8 +237,8 @@ def build_body_row(
     invoice: dict[str, str],
     shared: dict[str, Any],
 ) -> dict[str, Any]:
-    szxmid = resolve_expense_item_pk(invoice["expense_item"])
-    invoice_type_pk = resolve_invoice_type_pk(invoice["invoice_type"])
+    szxmid = lookup_expense_item_pk(invoice["expense_item"])
+    invoice_type_pk = lookup_invoice_type_pk(invoice["invoice_type"])
     amount = invoice["amount"]
     tax_amount = invoice["tax_amount"]
     vat_amount = invoice["vat_amount"]
@@ -505,8 +439,8 @@ def build_save_form(args: argparse.Namespace, defaults: dict[str, Any], invoices
         "defitem13": defitem13,
         "invoices": [
             {
-                "expense_item": {"name": inv["expense_item"], "pk": resolve_expense_item_pk(inv["expense_item"])},
-                "invoice_type": {"name": inv["invoice_type"], "pk": resolve_invoice_type_pk(inv["invoice_type"])},
+                "expense_item": {"name": inv["expense_item"], "pk": lookup_expense_item_pk(inv["expense_item"])},
+                "invoice_type": {"name": inv["invoice_type"], "pk": lookup_invoice_type_pk(inv["invoice_type"])},
                 "invoice_no": inv["invoice_no"],
             }
             for inv in invoices
