@@ -14,20 +14,6 @@ for cmd in python3 agent-browser; do
   fi
 done
 
-# --- Phase 1c: Browser daemon health (needs PROFILE_DIR when set) ---
-if command -v agent-browser &>/dev/null && [[ -n "${SKILL_DIR:-}" ]]; then
-  ACCOUNT_WORKSPACE_EARLY="${ACCOUNT_WORKSPACE:-$PWD/${ERM_ACCOUNT:-}}"
-  PROFILE_DIR_EARLY="${PROFILE_DIR:-${ACCOUNT_WORKSPACE_EARLY}/browser-profile}"
-  if ! SKILL_DIR="$SKILL_DIR" PROFILE_DIR="$PROFILE_DIR_EARLY" bash "${SKILL_DIR}/scripts/check_browser_health.sh" >/dev/null 2>"${TMPDIR:-/tmp}/erm-preflight-browser.$$.json"; then
-    _bh_msg="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("message","browser health check failed"))' "${TMPDIR:-/tmp}/erm-preflight-browser.$$.json" 2>/dev/null || echo "browser health check failed")"
-    errors+=("[FAIL] Phase 1c: $_bh_msg (see stderr JSON from check_browser_health.sh)")
-    cat "${TMPDIR:-/tmp}/erm-preflight-browser.$$.json" >&2 2>/dev/null || true
-    rm -f "${TMPDIR:-/tmp}/erm-preflight-browser.$$.json"
-  else
-    rm -f "${TMPDIR:-/tmp}/erm-preflight-browser.$$.json"
-  fi
-fi
-
 # --- Phase 2: Required environment variables ---
 for var in SKILL_DIR ERM_ACCOUNT INVOICES_JSON; do
   if [[ -z "${!var:-}" ]]; then
@@ -35,12 +21,29 @@ for var in SKILL_DIR ERM_ACCOUNT INVOICES_JSON; do
   fi
 done
 
-# Resolve Python env (same as run_reimbursement_pipeline.sh / login_erm.sh)
+# Resolve Python env + workspace paths (same as run_reimbursement_pipeline.sh / login_erm.sh)
 if [[ -n "${SKILL_DIR:-}" ]] && [[ -f "${SKILL_DIR}/scripts/lib/init.sh" ]]; then
   # shellcheck source=lib/init.sh
   source "${SKILL_DIR}/scripts/lib/init.sh"
   # shellcheck source=lib/resolve_python_env.sh
   source "${ERM_SCRIPT_LIB}/resolve_python_env.sh"
+fi
+if [[ -n "${SKILL_DIR:-}" ]] && [[ -n "${ERM_ACCOUNT:-}" ]] && [[ -f "${SKILL_DIR}/scripts/lib/erm_workspace.sh" ]]; then
+  # shellcheck source=lib/erm_workspace.sh
+  source "${SKILL_DIR}/scripts/lib/erm_workspace.sh"
+  erm_resolve_workspace
+fi
+
+# --- Phase 1c: Browser daemon health (after workspace resolved) ---
+if command -v agent-browser &>/dev/null && [[ -n "${SKILL_DIR:-}" ]] && [[ -n "${PROFILE_DIR:-}" ]]; then
+  if ! SKILL_DIR="$SKILL_DIR" PROFILE_DIR="$PROFILE_DIR" bash "${SKILL_DIR}/scripts/check_browser_health.sh" >/dev/null 2>"${TMPDIR:-/tmp}/erm-preflight-browser.$$.json"; then
+    _bh_msg="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("message","browser health check failed"))' "${TMPDIR:-/tmp}/erm-preflight-browser.$$.json" 2>/dev/null || echo "browser health check failed")"
+    errors+=("[FAIL] Phase 1c: $_bh_msg (see stderr JSON from check_browser_health.sh)")
+    cat "${TMPDIR:-/tmp}/erm-preflight-browser.$$.json" >&2 2>/dev/null || true
+    rm -f "${TMPDIR:-/tmp}/erm-preflight-browser.$$.json"
+  else
+    rm -f "${TMPDIR:-/tmp}/erm-preflight-browser.$$.json"
+  fi
 fi
 
 # Phase 1b: httpx import check (after resolve_python_env.sh so correct python3 is on PATH)
@@ -69,12 +72,12 @@ canonical_abs_path() {
   printf '%s/%s\n' "$dir" "$base"
 }
 
-# --- Phase 3: Path isolation ---
-ACCOUNT_WORKSPACE="${ACCOUNT_WORKSPACE:-$PWD/${ERM_ACCOUNT:-}}"
-
+# --- Phase 3: Path isolation (ACCOUNT_WORKSPACE from erm_resolve_workspace) ---
 if [[ -n "${ATTACHMENT_FILE:-}${ATTACHMENT_FILES:-}" ]]; then
-  if [[ ! -d "$ACCOUNT_WORKSPACE" ]]; then
-    errors+=("[FAIL] Phase 3: ACCOUNT_WORKSPACE is not a directory ($ACCOUNT_WORKSPACE); create it (mkdir -p) before using attachments — see SKILL.md step 0)")
+  if [[ -z "${ACCOUNT_WORKSPACE:-}" ]]; then
+    errors+=("[FAIL] Phase 3: ERM_ACCOUNT must be set to resolve workspace for attachments")
+  elif [[ ! -d "$ACCOUNT_WORKSPACE" ]]; then
+    errors+=("[FAIL] Phase 3: workspace is not a directory ($ACCOUNT_WORKSPACE); create it (mkdir -p \"\$PWD/\${ERM_ACCOUNT}/attachments\") before using attachments — see SKILL.md step 0)")
   fi
 fi
 

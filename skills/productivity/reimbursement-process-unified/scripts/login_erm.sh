@@ -4,12 +4,13 @@ set -euo pipefail
 # ERM auto-login script: probe → login → verify.
 #
 # Required env:
-#   SKILL_DIR   - path to this skill directory
-#   PROFILE_DIR - agent-browser profile directory
+#   SKILL_DIR    - path to this skill directory
+#   ERM_ACCOUNT  - account id (login username + workspace dir name)
 #
 # Optional env:
-#   ERM_USERID    - required for fresh login (set via env before run)
-#   ERM_PASSWORD  - required for fresh login (set via env before run)
+#   ERM_PASSWORD - required for fresh login (set via env before run)
+#
+# Derived (do not set): ACCOUNT_WORKSPACE=$PWD/${ERM_ACCOUNT}, PROFILE_DIR=.../browser-profile
 #
 # Exit codes:
 #   0 - login successful (or already logged in)
@@ -43,11 +44,13 @@ require_env() {
 }
 
 require_env SKILL_DIR
-require_env PROFILE_DIR
-export PROFILE_DIR
+require_env ERM_ACCOUNT
 
 # shellcheck source=lib/init.sh
 source "${SKILL_DIR}/scripts/lib/init.sh"
+# shellcheck source=lib/erm_workspace.sh
+source "${ERM_SCRIPT_LIB}/erm_workspace.sh"
+erm_resolve_workspace
 # shellcheck source=lib/resolve_python_env.sh
 source "${ERM_SCRIPT_LIB}/resolve_python_env.sh"
 # shellcheck source=lib/erm_browser.sh
@@ -85,8 +88,8 @@ fi
 
 step "not_authenticated, please provide credentials"
 
-if [[ -z "${ERM_USERID:-}" || -z "${ERM_PASSWORD:-}" ]]; then
-  die2 "请提供账号(ERM_USERID)和密码(ERM_PASSWORD)，通过环境变量设置后重新运行。"
+if [[ -z "${ERM_PASSWORD:-}" ]]; then
+  die2 "请提供密码(ERM_PASSWORD)，并确保已设置 ERM_ACCOUNT，通过环境变量设置后重新运行。"
 fi
 
 # ---------------------------------------------------------------------------
@@ -171,12 +174,12 @@ SUBMIT_REF="$(echo "$REFS" | python3 -c "import json,sys;print(json.load(sys.std
 step "fill_credentials userid_ref=@${USERID_REF} password_ref=@${PASSWORD_REF} submit_ref=@${SUBMIT_REF}"
 
 erm_browser_run_chained \
-  "fill $(printf '%q' "@${USERID_REF}") $(printf '%q' "$ERM_USERID")" \
+  "fill $(printf '%q' "@${USERID_REF}") $(printf '%q' "$ERM_ACCOUNT")" \
   "fill $(printf '%q' "@${PASSWORD_REF}") $(printf '%q' "$ERM_PASSWORD")" \
   "click $(printf '%q' "@${SUBMIT_REF}")" \
   "wait --load networkidle" || exit $?
 
-unset ERM_USERID ERM_PASSWORD
+unset ERM_PASSWORD
 
 step "click_submit_done"
 

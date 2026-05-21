@@ -1,8 +1,8 @@
 ---
 name: reimbursement-process-unified
-description: 自动处理内网 ERM 通用报销单。脚本负责确定性操作（菜单 URL、dispatch 默认值、附件上传、保存）；agent-browser --profile 负责登录与最终核验。所有 cookie/附件/运行产物按 ERM 账号隔离到 ACCOUNT_WORKSPACE。登录排错见 references/login.md。
+description: 自动处理内网 ERM 通用报销单。脚本负责确定性操作（菜单 URL、dispatch 默认值、附件上传、保存）；agent-browser --profile 负责登录与最终核验。所有 cookie/附件/运行产物按 ERM 账号隔离到 $PWD/${ERM_ACCOUNT}。登录排错见 references/login.md。
 author: Hermes Agent
-version: 2.4
+version: 2.5
 created: 2026-05-06
 updated: 2026-05-21
 tags: [finance, reimbursement, internal-system, browser, scripts]
@@ -23,10 +23,8 @@ requires:
 | 变量 | 必填 | 默认 | 说明 |
 |------|------|------|------|
 | `SKILL_DIR` | 是 | — | 当前技能目录绝对路径 |
-| `ERM_ACCOUNT` | 是 | — | ERM 账号标识（用于工作空间隔离） |
-| `ACCOUNT_WORKSPACE` | 否 | `$PWD/${ERM_ACCOUNT}` | 账号专属工作空间根目录 |
-| `PROFILE_DIR` | 否 | `${ACCOUNT_WORKSPACE}/browser-profile` | 浏览器 profile，持久化 session |
-| `RUN_DIR` | 否 | `${ACCOUNT_WORKSPACE}/runs/general-<ts>` | 本次运行产物目录 |
+| `ERM_ACCOUNT` | 是 | — | ERM 账号（登录用户名 + 工作空间目录名）；工作空间固定为 `$PWD/${ERM_ACCOUNT}`，profile 为 `$PWD/${ERM_ACCOUNT}/browser-profile`（脚本推导，勿手设） |
+| `ERM_PASSWORD` | 登录时 | — | 仅 `login_erm.sh` 需要；跑完后 `unset` |
 | `INVOICES_JSON` | 是 | — | 发票 JSON 路径（预检和 pipeline 共用） |
 | `DRY_RUN` | 否 | `0` | `1` = 只构造 payload 不提交 |
 | `COOKIE` | 否 | 从 profile 导出 | 手动指定时仍须通过 Gate.A 探针 |
@@ -35,7 +33,7 @@ requires:
 
 ERM 主机地址写死在 `scripts/lib/erm_common.py::ERM_BASE_URL`，不要向用户索取。
 
-ERM 账号和密码只通过环境变量传给 `scripts/login_erm.sh`（`ERM_USERID` / `ERM_PASSWORD`），**不写入日志、回复、文件、commit**。
+ERM 账号（`ERM_ACCOUNT`）与密码（`ERM_PASSWORD`）只通过环境变量传给 `scripts/login_erm.sh`，**不写入日志、回复、文件、commit**。勿设置 `ACCOUNT_WORKSPACE`、`PROFILE_DIR`、`ERM_USERID`。
 
 ## 推荐流程
 
@@ -44,28 +42,26 @@ ERM 账号和密码只通过环境变量传给 `scripts/login_erm.sh`（`ERM_USE
 ```bash
 export SKILL_DIR="<absolute-path-to-this-skill>"
 export ERM_ACCOUNT='<account>'
-export ACCOUNT_WORKSPACE="${ACCOUNT_WORKSPACE:-$PWD/${ERM_ACCOUNT}}"
-export PROFILE_DIR="${ACCOUNT_WORKSPACE}/browser-profile"
-mkdir -p "$ACCOUNT_WORKSPACE"/{browser-profile,attachments,runs}
+mkdir -p "$PWD/${ERM_ACCOUNT}"/{browser-profile,attachments,runs}
 ```
 
 当用户提供发票文件时：
 
 1. 先解析文件获取发票信息。
-2. 将**原始文件**复制到 `${ACCOUNT_WORKSPACE}/attachments/<date-or-tag>/`。
+2. 将**原始文件**复制到 `$PWD/${ERM_ACCOUNT}/attachments/<date-or-tag>/`。
 3. 设置 `ATTACHMENT_FILE` 或 `ATTACHMENT_FILES`（绝对路径，须在 workspace 内）。
 4. 不要询问「是否需要上传附件」。
 
 ```bash
-cp /path/from/user/invoice.pdf "$ACCOUNT_WORKSPACE/attachments/20260514/invoice.pdf"
-export ATTACHMENT_FILE="$ACCOUNT_WORKSPACE/attachments/20260514/invoice.pdf"
+cp /path/from/user/invoice.pdf "$PWD/${ERM_ACCOUNT}/attachments/20260514/invoice.pdf"
+export ATTACHMENT_FILE="$PWD/${ERM_ACCOUNT}/attachments/20260514/invoice.pdf"
 ```
 
 ### 1) 构造发票数据
 
 收集摘要/用途（`--zy`，整张报销单共用），然后构造发票 JSON。
 
-发票 JSON（`$ACCOUNT_WORKSPACE/runs/invoices.json`）为数组，每张发票包含：
+发票 JSON（`$PWD/${ERM_ACCOUNT}/runs/invoices.json`）为数组，每张发票包含：
 
 | 字段 | 说明 |
 |------|------|
@@ -84,12 +80,12 @@ export ATTACHMENT_FILE="$ACCOUNT_WORKSPACE/attachments/20260514/invoice.pdf"
 4. 预检报 `invoice_enum_invalid` 时，用 stderr 的 `suggestions` / `allowed_*` 向用户确认后改 JSON，**禁止**擅自选最接近项继续。
 
 ```bash
-cat > "$ACCOUNT_WORKSPACE/runs/invoices.json" << 'EOF'
+cat > "$PWD/${ERM_ACCOUNT}/runs/invoices.json" << 'EOF'
 [
   {"amount":"60","tax_amount":"6","vat_amount":"66","invoice_no":"147258369","expense_item":"党建工作经费","invoice_type":"增值税普通发票"}
 ]
 EOF
-export INVOICES_JSON="$ACCOUNT_WORKSPACE/runs/invoices.json"
+export INVOICES_JSON="$PWD/${ERM_ACCOUNT}/runs/invoices.json"
 ```
 
 ### 2) 预检
@@ -98,11 +94,11 @@ export INVOICES_JSON="$ACCOUNT_WORKSPACE/runs/invoices.json"
 bash "${SKILL_DIR}/scripts/preflight_check.sh"
 ```
 
-预检内容：
+预检内容（执行顺序）：
 - Phase 1：依赖检查（python3, agent-browser）
-- Phase 1c：浏览器 daemon 健康（`check_browser_health.sh`）
 - Phase 2：环境变量（SKILL_DIR, ERM_ACCOUNT, INVOICES_JSON）
-- Phase 3：路径隔离（ATTACHMENT_FILE(S) 须在 ACCOUNT_WORKSPACE 内；若设置了附件则 ACCOUNT_WORKSPACE 须已存在）
+- Phase 1c：浏览器 daemon 健康（`check_browser_health.sh`；须已设置 `ERM_ACCOUNT`，profile 为 `$PWD/${ERM_ACCOUNT}/browser-profile`）
+- Phase 3：路径隔离（ATTACHMENT_FILE(S) 须在 `$PWD/${ERM_ACCOUNT}` 内；若设置了附件则该目录须已存在）
 - Phase 4：发票 JSON 校验（有效 JSON、非空数组、每条含全部必填字段）
 - Phase 4b：枚举校验（`expense_item` / `invoice_type` 与系统字典一致）
 - Phase 5：附件文件存在性（无附件时仅 warn）
@@ -112,10 +108,9 @@ bash "${SKILL_DIR}/scripts/preflight_check.sh"
 ### 3) 登录
 
 ```bash
-export ERM_USERID='<from-user>'
-export ERM_PASSWORD='<from-user>'
+export ERM_PASSWORD='<from-user>'   # ERM_ACCOUNT 已在 §0 设置
 "$SKILL_DIR/scripts/login_erm.sh"
-unset ERM_USERID ERM_PASSWORD
+unset ERM_PASSWORD
 ```
 
 退出码：`0` 已登录或登录成功；`1` 登录失败（stderr JSON，常见 `error_code`: `wrong_password`）；`2` 环境/快照解析失败；`3` 浏览器 daemon/基础设施失败（**含开头** `gate_a_try_already_logged_in` 探针失败，不会进入填密码流程）。脚本失败时读 stderr 的 `error_code`，并对照 `references/errors.md` 与 `references/login.md`。**`wrong_password` 勿自动重试**；**`browser_daemon_error` 须停机并告知用户**。
@@ -142,7 +137,7 @@ export DRY_RUN=0
 
 | 路径 | 角色 |
 |------|------|
-| `scripts/lib/` | 共享层：`init.sh`、`erm_common.py`、`erm_enums.py`、`erm_browser.sh`、`gate_a_session.sh`、`resolve_python_env.sh` |
+| `scripts/lib/` | 共享层：`init.sh`、`erm_workspace.sh`、`erm_common.py`、`erm_enums.py`、`erm_browser.sh`、`gate_a_session.sh`、`resolve_python_env.sh` |
 | `scripts/*.py` | pipeline 内部步骤（勿直接调用） |
 | `scripts/archive/` | 维护者调试脚本（非运行时） |
 
@@ -153,7 +148,7 @@ export DRY_RUN=0
 
 - 单文件：`ATTACHMENT_FILE`；多文件：`ATTACHMENT_FILES`（`:` 分隔绝对路径，路径中禁止 `:`）。
 - 同时设置时以 `ATTACHMENT_FILES` 为准。
-- **路径必须位于 `ACCOUNT_WORKSPACE` 目录下**（pipeline 硬闸）。
+- **路径必须位于 `$PWD/${ERM_ACCOUNT}` 目录下**（pipeline 硬闸）。
 - 产物在 `$RUN_DIR`：`attachment.json`（首份别名）、`attachment_1.json`、…
 - Gate.E：每个文件 `ok=true`，`accessorybillid` 一致。
 
@@ -166,7 +161,7 @@ pipeline 内置检查，失败即停机：
 - **Gate.C**：`/iwebap/evt/dispatch` 响应体含 `dataTables`。
 - **Gate.D**：`defaults` 含 `head.pk_org_v`、`head.deptid_v`、`head.jsfs`、`head.skyhzh`、`body.defitem13`。
 - **Gate.E**：附件上传 `ok=true` 且有 `accessorybillid`。
-- **隔离**：`ATTACHMENT_FILE(S)` 必须在 `ACCOUNT_WORKSPACE` 下。
+- **隔离**：`ATTACHMENT_FILE(S)` 必须在 `$PWD/${ERM_ACCOUNT}` 下。
 
 成功路径：`dispatch.json` 含 `dataTables`；`defaults.json` 关键字段齐全；`save_result.json` 中 `ok=true`。
 

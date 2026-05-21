@@ -36,7 +36,7 @@ def classify(*, url: str = "", tip: str = "", page_text: str = "") -> dict[str, 
             return {
                 "error_code": "wrong_password",
                 "message": "用户名或密码错误（页面仍在登录页）",
-                "hint": "向用户确认 ERM_USERID/ERM_PASSWORD 后重新运行 login_erm.sh；勿自动重试以免锁号",
+                "hint": "向用户确认 ERM_ACCOUNT/ERM_PASSWORD 后重新运行 login_erm.sh；勿自动重试以免锁号",
             }
 
     if re.search(r"验证码|captcha|图形验证", combined, re.I):

@@ -21,7 +21,7 @@
 | `captcha_required` | 图形验证码 | 请用户浏览器手动登录一次，再跑 `login_erm.sh` |
 | `session_conflict` | cookie probe 未认证、会话抢占 | 说明可能他处登录；重跑 login，勿改业务字段 |
 | `login_failed` | 其他登录页错误 | 引用 `references/login.md`，向用户说明 |
-| `env_missing` | 缺 SKILL_DIR / 凭据等 | 补齐环境变量后重跑 |
+| `env_missing` | 缺 SKILL_DIR / ERM_ACCOUNT / ERM_PASSWORD 等 | 补齐环境变量后重跑 |
 | `snapshot_parse_failed` | 登录页结构/snapshot 异常 | `agent-browser --profile "$PROFILE_DIR" close` 后重试；仍失败则停机 |
 | `browser_daemon_error` | daemon/内存/连接失败 | **停机**；向用户说明基础设施问题，建议 close/重启 |
 | `browser_not_installed` | 未安装 CLI | 提示安装 agent-browser |
@@ -48,8 +48,8 @@
 ## 调用关系（简图）
 
 ```
-preflight_check.sh → lib/init.sh, lib/resolve_python_env.sh, check_browser_health.sh, validate_invoice_enums.py
-login_erm.sh       → lib/{init,erm_browser,gate_a_session,resolve_python_env}.sh
+preflight_check.sh → lib/{init,erm_workspace,resolve_python_env}.sh, check_browser_health.sh, validate_invoice_enums.py
+login_erm.sh       → lib/{init,erm_workspace,erm_browser,gate_a_session,resolve_python_env}.sh
 run_reimbursement_pipeline.sh → lib/* + scripts/*.py（save/get/upload/…）
 ```
 

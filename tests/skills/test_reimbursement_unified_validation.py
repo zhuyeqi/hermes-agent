@@ -29,6 +29,8 @@ def _run_classify(**kwargs: str) -> dict:
 def test_classify_wrong_password():
     out = _run_classify(url="http://x/login.jsp", tip="用户名或密码错误")
     assert out["error_code"] == "wrong_password"
+    assert "ERM_ACCOUNT" in out["hint"]
+    assert "ERM_USERID" not in out["hint"]
 
 
 def test_classify_captcha():
@@ -130,3 +132,68 @@ def test_validate_invoice_enums_rejects_unknown_expense(tmp_path):
     assert set(allowed) == set(EXPENSE_ITEM_TO_PK.keys())
     assert "党建工作经费" in allowed
     assert set(err["issues"][0]["suggestions"]).issubset(set(allowed))
+
+
+def _run_erm_resolve_workspace(*, account: str, cwd: Path, extra_env: dict | None = None) -> subprocess.CompletedProcess[str]:
+    env = {
+        **dict(__import__("os").environ),
+        "ERM_ACCOUNT": account,
+        "PWD": str(cwd),
+    }
+    if extra_env:
+        env.update(extra_env)
+    script = (
+        f"source {SCRIPT_LIB / 'erm_workspace.sh'} && "
+        "erm_resolve_workspace && "
+        'printf "ACCOUNT_WORKSPACE=%s\\nPROFILE_DIR=%s\\n" "$ACCOUNT_WORKSPACE" "$PROFILE_DIR"'
+    )
+    return subprocess.run(
+        ["bash", "-c", script],
+        cwd=str(cwd),
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+
+def test_erm_resolve_workspace_paths(tmp_path):
+    proc = _run_erm_resolve_workspace(account="testuser", cwd=tmp_path)
+    lines = dict(line.split("=", 1) for line in proc.stdout.strip().splitlines())
+    assert lines["ACCOUNT_WORKSPACE"] == str(tmp_path / "testuser")
+    assert lines["PROFILE_DIR"] == str(tmp_path / "testuser" / "browser-profile")
+
+
+@pytest.mark.parametrize("bad_account", ["../evil", "user/sub", "a..b"])
+def test_erm_resolve_workspace_rejects_invalid_account(tmp_path, bad_account: str):
+    proc = subprocess.run(
+        [
+            "bash",
+            "-c",
+            f"source {SCRIPT_LIB / 'erm_workspace.sh'} && erm_resolve_workspace",
+        ],
+        cwd=str(tmp_path),
+        env={
+            **dict(__import__("os").environ),
+            "ERM_ACCOUNT": bad_account,
+            "PWD": str(tmp_path),
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 2
+    assert "ERM_ACCOUNT" in proc.stderr
+
+
+def test_erm_resolve_workspace_ignores_stale_overrides(tmp_path):
+    proc = _run_erm_resolve_workspace(
+        account="testuser",
+        cwd=tmp_path,
+        extra_env={
+            "ACCOUNT_WORKSPACE": "/wrong",
+            "PROFILE_DIR": "/wrong/profile",
+        },
+    )
+    lines = dict(line.split("=", 1) for line in proc.stdout.strip().splitlines())
+    assert lines["ACCOUNT_WORKSPACE"] == str(tmp_path / "testuser")
+    assert lines["PROFILE_DIR"] == str(tmp_path / "testuser" / "browser-profile")

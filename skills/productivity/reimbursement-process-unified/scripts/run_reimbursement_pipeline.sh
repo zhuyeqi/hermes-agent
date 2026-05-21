@@ -9,9 +9,9 @@ set -euo pipefail
 #   ERM_ACCOUNT  - account id for workspace isolation (browser profile + paths)
 #
 # Optional env:
-#   ACCOUNT_WORKSPACE - root for this account (default: $PWD/${ERM_ACCOUNT})
-#   PROFILE_DIR       - agent-browser profile (default: ${ACCOUNT_WORKSPACE}/browser-profile)
 #   RUN_DIR           - artifact output dir (default: ${ACCOUNT_WORKSPACE}/runs/general-YYYYMMDD-HHMMSS)
+#
+# Derived (do not set): ACCOUNT_WORKSPACE=$PWD/${ERM_ACCOUNT}, PROFILE_DIR=.../browser-profile
 #   COOKIE            - raw Cookie header; if unset, exported from profile after Gate.A
 #   INVOICES_JSON     - path to invoices JSON file (required; forwarded as --invoices-json to save script)
 #   ATTACHMENT_FILE   - optional single local file path
@@ -45,6 +45,9 @@ require_env INVOICES_JSON
 
 # shellcheck source=lib/init.sh
 source "${SKILL_DIR}/scripts/lib/init.sh"
+# shellcheck source=lib/erm_workspace.sh
+source "${ERM_SCRIPT_LIB}/erm_workspace.sh"
+erm_resolve_workspace
 # shellcheck source=lib/resolve_python_env.sh
 source "${ERM_SCRIPT_LIB}/resolve_python_env.sh"
 # shellcheck source=lib/erm_browser.sh
@@ -56,8 +59,6 @@ if [[ ! -d "$SKILL_DIR/scripts" ]]; then
   die "SKILL_DIR does not look like the skill directory: $SKILL_DIR"
 fi
 
-ACCOUNT_WORKSPACE="${ACCOUNT_WORKSPACE:-$PWD/${ERM_ACCOUNT}}"
-PROFILE_DIR="${PROFILE_DIR:-${ACCOUNT_WORKSPACE}/browser-profile}"
 RUN_DIR="${RUN_DIR:-${ACCOUNT_WORKSPACE}/runs/general-$(date +%Y%m%d-%H%M%S)}"
 COOKIE="${COOKIE:-}"
 ATTACHMENT_FILE="${ATTACHMENT_FILE:-}"
@@ -118,7 +119,7 @@ COOKIE="$(gate_a_ensure_cookie "$RUN_DIR/cdp_cookies.json")" \
   || die "Gate.A failed: no cookies in profile — run login_erm.sh first (see references/login.md)"
 export COOKIE
 gate_a_require_authenticated "$COOKIE" \
-  "Re-login with: ERM_USERID=... ERM_PASSWORD=... \"${SKILL_DIR}/scripts/login_erm.sh\"" >/dev/null
+  "Re-login with: ERM_ACCOUNT=... ERM_PASSWORD=... \"${SKILL_DIR}/scripts/login_erm.sh\"" >/dev/null
 step "gate_a_ok"
 
 # --- Attachment paths must live under ACCOUNT_WORKSPACE ---
