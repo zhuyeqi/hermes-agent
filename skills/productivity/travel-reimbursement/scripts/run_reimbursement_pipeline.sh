@@ -2,21 +2,21 @@
 set -euo pipefail
 
 # Single-entry orchestrator for the travel reimbursement skill.
-# ERM host: single source of truth in scripts/erm_common.py (ERM_BASE_URL).
+# ERM host: single source of truth in scripts/lib/erm_common.py (ERM_BASE_URL).
 #
 # Required env:
-#   SKILL_DIR         - path to this skill directory
-#   ERM_ACCOUNT       - account identifier for workspace isolation
-#   ITEMS_JSON        - path to items JSON (must be inside ACCOUNT_WORKSPACE)
+#   SKILL_DIR    - path to this skill directory
+#   ERM_ACCOUNT  - account id for workspace isolation
+#   ITEMS_JSON   - path to items JSON (must be inside ACCOUNT_WORKSPACE)
 #
 # Optional env:
-#   ACCOUNT_WORKSPACE - root directory for this account's workspace
-#   PROFILE_DIR       - agent-browser profile dir (default: ACCOUNT_WORKSPACE/browser-profile)
-#   COOKIE            - raw Cookie header; if unset, auto-exported from profile
-#   ATTACHMENT_FILE   - optional single local file path to upload
-#   ATTACHMENT_FILES  - optional colon-separated absolute paths for multi-file upload
-#   RUN_DIR           - optional run directory (default: ACCOUNT_WORKSPACE/runs/travel-YYYYMMDD-HHMMSS)
+#   RUN_DIR           - artifact output dir (default: ${ACCOUNT_WORKSPACE}/runs/travel-YYYYMMDD-HHMMSS)
+#   COOKIE            - raw Cookie header; if unset, exported from profile after Gate.A
+#   ATTACHMENT_FILE   - optional single local file path
+#   ATTACHMENT_FILES  - optional colon-separated absolute paths (takes precedence)
 #   DRY_RUN           - "1" to only build payload (default: 0)
+#
+# Derived (do not set): ACCOUNT_WORKSPACE=$PWD/${ERM_ACCOUNT}, PROFILE_DIR=.../browser-profile
 #
 # Output artifacts in RUN_DIR:
 #   cdp_cookies.json, menu_url.json, dispatch.json, defaults.json,
@@ -40,26 +40,37 @@ require_env SKILL_DIR
 require_env ERM_ACCOUNT
 require_env ITEMS_JSON
 
-source "${SKILL_DIR}/scripts/resolve_python_env.sh"
-
-ACCOUNT_WORKSPACE="${ACCOUNT_WORKSPACE}"
-PROFILE_DIR="${PROFILE_DIR:-${ACCOUNT_WORKSPACE}/browser-profile}"
-RUN_DIR="${RUN_DIR:-${ACCOUNT_WORKSPACE}/runs/travel-$(date +%Y%m%d-%H%M%S)}"
-
-mkdir -p "$RUN_DIR"
+# shellcheck source=lib/init.sh
+source "${SKILL_DIR}/scripts/lib/init.sh"
+# shellcheck source=lib/erm_workspace.sh
+source "${ERM_SCRIPT_LIB}/erm_workspace.sh"
+erm_resolve_workspace
+# shellcheck source=lib/resolve_python_env.sh
+source "${ERM_SCRIPT_LIB}/resolve_python_env.sh"
+# shellcheck source=lib/erm_browser.sh
+source "${ERM_SCRIPT_LIB}/erm_browser.sh"
+# shellcheck source=lib/gate_a_session.sh
+source "${ERM_SCRIPT_LIB}/gate_a_session.sh"
 
 if [[ ! -d "$SKILL_DIR/scripts" ]]; then
   die "SKILL_DIR does not look like the skill directory: $SKILL_DIR"
 fi
 
+RUN_DIR="${RUN_DIR:-${ACCOUNT_WORKSPACE}/runs/travel-$(date +%Y%m%d-%H%M%S)}"
+COOKIE="${COOKIE:-}"
+ATTACHMENT_FILE="${ATTACHMENT_FILE:-}"
+ATTACHMENT_FILES="${ATTACHMENT_FILES:-}"
+DRY_RUN="${DRY_RUN:-0}"
+
+mkdir -p "$RUN_DIR"
+export RUN_DIR
+
 ERM_BASE_URL="$(
-  PYTHONPATH="${SKILL_DIR}/scripts" python3 -c "from erm_common import ERM_BASE_URL; print(ERM_BASE_URL)"
+  python3 -c "from erm_common import ERM_BASE_URL; print(ERM_BASE_URL)"
 )"
 [[ -n "$ERM_BASE_URL" ]] || die "failed to resolve ERM_BASE_URL from erm_common.py"
 export ERM_BASE_URL
 
-# Enforce ACCOUNT_WORKSPACE isolation: ITEMS_JSON and ATTACHMENT_FILES must live inside ACCOUNT_WORKSPACE.
-# ITEMS_JSON and attachment paths are files: `cd file.json` fails, so resolve via dirname + basename.
 canonical_abs_path() {
   local p="$1"
   if [[ -d "$p" ]]; then
@@ -93,30 +104,37 @@ validate_workspace_path() {
 
 validate_workspace_path "$ITEMS_JSON" "ITEMS_JSON"
 
-# --- Cookie export ---
-COOKIE="${COOKIE:-}"
-if [[ -z "$COOKIE" ]]; then
-  step "export_cookies"
-  agent-browser --profile "$PROFILE_DIR" cookies get --json > "$RUN_DIR/cdp_cookies.json"
-
-  COOKIE="$(python3 "$SKILL_DIR/scripts/build_cookie_header.py" \
-    --cookies-json "$RUN_DIR/cdp_cookies.json" \
-    | python3 -c "import json,sys; print(json.load(sys.stdin)['cookie_header'])")"
-  [[ -n "$COOKIE" ]] || die "failed to build cookie header from profile"
+# --- Enum precheck (must match preflight Phase 4b) ---
+step "validate_travel_items_enums"
+if ! python3 "${ERM_SCRIPT_ROOT}/validate_travel_items_enums.py" \
+  --items-json "$ITEMS_JSON"; then
+  die "items enum precheck failed — fix ITEMS_JSON and run preflight_check.sh (see references/errors.md)"
 fi
+
+# --- Gate.A: cookie export + HTTP probe ---
+step "gate_a_session"
+export PROFILE_DIR
+COOKIE="$(gate_a_ensure_cookie "$RUN_DIR/cdp_cookies.json")" \
+  || die "Gate.A failed: no cookies in profile — run login_erm.sh first (see references/login.md)"
+export COOKIE
+gate_a_require_authenticated "$COOKIE" \
+  "Re-login with: ERM_ACCOUNT=... ERM_PASSWORD=... \"${SKILL_DIR}/scripts/login_erm.sh\"" >/dev/null
+step "gate_a_ok"
 
 # --- Pipeline ---
 
 step "get_travel_reimbursement_url"
-python3 "$SKILL_DIR/scripts/get_travel_reimbursement_url.py" \
+python3 "${ERM_SCRIPT_ROOT}/get_travel_reimbursement_url.py" \
   --cookie "$COOKIE" \
   > "$RUN_DIR/menu_url.json"
 
 python3 - <<PY
 import json
+import os
 from pathlib import Path
 
-obj = json.loads(Path("$RUN_DIR/menu_url.json").read_text(encoding="utf-8"))
+run_dir = os.environ["RUN_DIR"]
+obj = json.loads(Path(run_dir, "menu_url.json").read_text(encoding="utf-8"))
 result = obj.get("result") or obj
 u = result.get("absolute_url") or result.get("url")
 if not u:
@@ -125,16 +143,15 @@ print("Gate.B ok")
 PY
 
 step "capture_dispatch (network monitor)"
-agent-browser --profile "$PROFILE_DIR" network requests --clear
-
 ADD_URL="$(python3 - <<PY
 import json
 import os
 from pathlib import Path
 from urllib.parse import urljoin
 
+run_dir = os.environ["RUN_DIR"]
 base_url = os.environ["ERM_BASE_URL"]
-data = json.loads(Path("$RUN_DIR/menu_url.json").read_text(encoding="utf-8"))
+data = json.loads(Path(run_dir, "menu_url.json").read_text(encoding="utf-8"))
 result = data.get("result") or data
 url = result.get("absolute_url") or result.get("url")
 if not url:
@@ -143,18 +160,22 @@ print(urljoin(base_url.rstrip("/") + "/", url))
 PY
 )"
 
-agent-browser --profile "$PROFILE_DIR" open "$ADD_URL"
-agent-browser --profile "$PROFILE_DIR" wait --load networkidle
+erm_browser_run_chained \
+  "network requests --clear" \
+  "open $(printf '%q' "$ADD_URL")" \
+  "wait --load load" || exit $?
 
 step "extract_dispatch (request detail)"
-agent-browser --profile "$PROFILE_DIR" \
-  network requests --filter "/iwebap/evt/dispatch" --json > "$RUN_DIR/dispatch_requests.json"
+erm_browser_run --profile "$PROFILE_DIR" \
+  network requests --filter "/iwebap/evt/dispatch" --json > "$RUN_DIR/dispatch_requests.json" || exit $?
 
 DISPATCH_REQ_ID="$(python3 - <<PY
 import json
+import os
 from pathlib import Path
 
-raw = json.loads(Path("$RUN_DIR/dispatch_requests.json").read_text(encoding="utf-8"))
+run_dir = os.environ["RUN_DIR"]
+raw = json.loads(Path(run_dir, "dispatch_requests.json").read_text(encoding="utf-8"))
 if isinstance(raw, dict) and "success" in raw:
     raw = raw.get("data", raw)
 entries = raw if isinstance(raw, list) else raw.get("requests", raw.get("entries", []))
@@ -168,14 +189,16 @@ print(req_id)
 PY
 )"
 
-agent-browser --profile "$PROFILE_DIR" \
-  network request "$DISPATCH_REQ_ID" --json > "$RUN_DIR/dispatch_detail.json"
+erm_browser_run --profile "$PROFILE_DIR" \
+  network request "$DISPATCH_REQ_ID" --json > "$RUN_DIR/dispatch_detail.json" || exit $?
 
 python3 - <<PY
 import json
+import os
 from pathlib import Path
 
-raw = json.loads(Path("$RUN_DIR/dispatch_detail.json").read_text(encoding="utf-8"))
+run_dir = os.environ["RUN_DIR"]
+raw = json.loads(Path(run_dir, "dispatch_detail.json").read_text(encoding="utf-8"))
 if isinstance(raw, dict) and "success" in raw:
     raw = raw.get("data", raw)
 body = raw.get("responseBody") or raw.get("content", {}).get("text", "")
@@ -186,21 +209,22 @@ data = json.loads(body)
 if not isinstance(data, dict) or "dataTables" not in data:
     raise SystemExit("Gate.C failed: dispatch body missing dataTables")
 
-Path("$RUN_DIR/dispatch.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+Path(run_dir, "dispatch.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 print("Gate.C ok")
 PY
 
 step "extract_dispatch_defaults"
-python3 "$SKILL_DIR/scripts/extract_dispatch_defaults.py" \
+python3 "${ERM_SCRIPT_ROOT}/extract_dispatch_defaults.py" \
   --dispatch-json "$RUN_DIR/dispatch.json" \
   > "$RUN_DIR/defaults.json"
 
-# Gate.D: verify essential defaults exist (head and at least one body table has fields)
 python3 - <<PY
 import json
+import os
 from pathlib import Path
 
-d = json.loads(Path("$RUN_DIR/defaults.json").read_text(encoding="utf-8"))
+run_dir = os.environ["RUN_DIR"]
+d = json.loads(Path(run_dir, "defaults.json").read_text(encoding="utf-8"))
 if "defaults" in d:
     d = d["defaults"]
 head = d.get("head") or {}
@@ -219,11 +243,8 @@ if missing:
 print("Gate.D ok")
 PY
 
-# Attachment upload (validate paths inside ACCOUNT_WORKSPACE)
 accessorybillid=""
 attachment_files=()
-ATTACHMENT_FILE="${ATTACHMENT_FILE:-}"
-ATTACHMENT_FILES="${ATTACHMENT_FILES:-}"
 if [[ -n "$ATTACHMENT_FILES" ]]; then
   IFS=':' read -r -a attachment_files <<< "$ATTACHMENT_FILES"
 elif [[ -n "$ATTACHMENT_FILE" ]]; then
@@ -245,7 +266,7 @@ if (( ${#attachment_files[@]} > 0 )); then
     [[ -n "$accessorybillid" ]] && upload_args+=( --pk-bill "$accessorybillid" )
 
     out_json="$RUN_DIR/attachment_$((idx+1)).json"
-    python3 "$SKILL_DIR/scripts/upload_reimbursement_attachment.py" \
+    python3 "${ERM_SCRIPT_ROOT}/upload_reimbursement_attachment.py" \
       "${upload_args[@]}" > "$out_json"
 
     bid="$(OUT_JSON="$out_json" python3 - <<'PY'
@@ -270,9 +291,8 @@ PY
   step "attachment_ok accessorybillid=$accessorybillid files=$total"
 fi
 
-# Save step: invoke save script with items-json
 step "save_bill"
-python3 "$SKILL_DIR/scripts/save_travel_reimbursement_from_dispatch.py" \
+python3 "${ERM_SCRIPT_ROOT}/save_travel_reimbursement_from_dispatch.py" \
   --cookie "$COOKIE" \
   --dispatch-json "$RUN_DIR/dispatch.json" \
   --items-json "$ITEMS_JSON" \
@@ -283,9 +303,11 @@ python3 "$SKILL_DIR/scripts/save_travel_reimbursement_from_dispatch.py" \
 
 python3 - <<PY
 import json
+import os
 from pathlib import Path
 
-out = json.loads(Path("$RUN_DIR/save_result.json").read_text(encoding="utf-8"))
+run_dir = os.environ["RUN_DIR"]
+out = json.loads(Path(run_dir, "save_result.json").read_text(encoding="utf-8"))
 if not out.get("ok"):
     raise SystemExit(f"save_bill failed: {out}")
 print("save_bill ok")

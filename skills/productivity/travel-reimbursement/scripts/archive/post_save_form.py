@@ -1,3 +1,4 @@
+# NON-RUNTIME — maintainer debug only. See archive/README.md.
 from __future__ import annotations
 
 """Post a prebuilt ERM savebill form.

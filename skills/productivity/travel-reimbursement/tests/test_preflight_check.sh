@@ -4,17 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")"/.. && pwd)"
 PREFLIGHT="$SCRIPT_DIR/scripts/preflight_check.sh"
 
-# Use a results file since subshells can't modify parent variables
 RESULTS=$(mktemp)
 trap 'rm -rf "$RESULTS"' EXIT
-
-run_test() {
-  local label="$1"
-  shift
-  local output rc
-  output=$("$@" 2>&1) && rc=0 || rc=$?
-  echo "$label|$rc|$output" >> "$RESULTS"
-}
 
 assert_fail() {
   local desc="$1"
@@ -49,138 +40,161 @@ assert_pass() {
   fi
 }
 
-# --- Setup: temp workspace with valid items JSON ---
-TMPDIR=$(mktemp -d)
-trap 'rm -rf "$TMPDIR" "$RESULTS"' EXIT
+TMPROOT=$(mktemp -d)
+trap 'rm -rf "$TMPROOT" "$RESULTS"' EXIT
 
+# Valid items with dictionary keys (see har/sample_items.json)
 valid_items='{
   "summary": "test trip",
-  "transports": [{"departure_date":"2026-05-01","arrival_date":"2026-05-03","vehicle":"train","invoice_form":"receipt","invoice_no":"T1","amount":"100.00"}],
-  "hotels": [{"city_type":"standard","days":2,"invoice_type":"vat","invoice_no":"H1","amount":"200.00"}],
-  "subsidies": [{"days":2,"tool":"train","official_car_pickup":"no","hosted_by_counterparty":"no"}]
+  "transports": [{"departure_date":"2026-05-01","arrival_date":"2026-05-03","vehicle":"火车（二等座）","invoice_form":"火车电子报销凭证","invoice_no":"T1","amount":"100.00"}],
+  "subsidies": [{"days":"2","tool":"火车","official_car_pickup":"否","hosted_by_counterparty":"否"}]
 }'
 
-echo "$valid_items" > "$TMPDIR/items_valid.json"
-
-# --- Tests ---
+setup_ws() {
+  local account="${1:-test}"
+  export SKILL_DIR="$SCRIPT_DIR"
+  export ERM_ACCOUNT="$account"
+  mkdir -p "$TMPROOT/$account"/{items,attachments,browser-profile}
+  cd "$TMPROOT"
+}
 
 # T1: missing required env vars
 (assert_fail "missing all env vars" "Phase 2")
 
 # T2: ITEMS_JSON file not found
 (
-  export SKILL_DIR="$SCRIPT_DIR"
-  export ERM_ACCOUNT="test"
-  export ACCOUNT_WORKSPACE="$TMPDIR"
-  export ITEMS_JSON="$TMPDIR/nonexistent.json"
+  setup_ws test
+  export ITEMS_JSON="$TMPROOT/test/items/nonexistent.json"
   assert_fail "ITEMS_JSON file not found" "file not found"
 )
 
 # T3: invalid JSON
 (
-  echo "not json" > "$TMPDIR/bad.json"
-  export SKILL_DIR="$SCRIPT_DIR"
-  export ERM_ACCOUNT="test"
-  export ACCOUNT_WORKSPACE="$TMPDIR"
-  export ITEMS_JSON="$TMPDIR/bad.json"
+  setup_ws test
+  echo "not json" > "$TMPROOT/test/items/bad.json"
+  export ITEMS_JSON="$TMPROOT/test/items/bad.json"
   assert_fail "invalid JSON" "not valid JSON"
 )
 
 # T4: missing summary
 (
-  echo '{"transports":[{"departure_date":"2026-05-01","arrival_date":"2026-05-03","vehicle":"t","invoice_form":"r","invoice_no":"T1","amount":"1"}]}' > "$TMPDIR/no_summary.json"
-  export SKILL_DIR="$SCRIPT_DIR"
-  export ERM_ACCOUNT="test"
-  export ACCOUNT_WORKSPACE="$TMPDIR"
-  export ITEMS_JSON="$TMPDIR/no_summary.json"
+  setup_ws test
+  echo '{"transports":[{"departure_date":"2026-05-01","arrival_date":"2026-05-03","vehicle":"火车（二等座）","invoice_form":"火车电子报销凭证","invoice_no":"T1","amount":"1"}]}' > "$TMPROOT/test/items/no_summary.json"
+  export ITEMS_JSON="$TMPROOT/test/items/no_summary.json"
   assert_fail "missing summary" "summary"
 )
 
 # T5: no transport/hotel/subsidy entries
 (
-  echo '{"summary":"x","transports":[],"hotels":[],"subsidies":[]}' > "$TMPDIR/empty.json"
-  export SKILL_DIR="$SCRIPT_DIR"
-  export ERM_ACCOUNT="test"
-  export ACCOUNT_WORKSPACE="$TMPDIR"
-  export ITEMS_JSON="$TMPDIR/empty.json"
+  setup_ws test
+  echo '{"summary":"x","transports":[],"hotels":[],"subsidies":[]}' > "$TMPROOT/test/items/empty.json"
+  export ITEMS_JSON="$TMPROOT/test/items/empty.json"
   assert_fail "no expense entries" "at least one of"
 )
 
 # T6: transport missing required field
 (
-  echo '{"summary":"x","transports":[{"departure_date":"2026-05-01"}]}' > "$TMPDIR/bad_transport.json"
-  export SKILL_DIR="$SCRIPT_DIR"
-  export ERM_ACCOUNT="test"
-  export ACCOUNT_WORKSPACE="$TMPDIR"
-  export ITEMS_JSON="$TMPDIR/bad_transport.json"
+  setup_ws test
+  echo '{"summary":"x","transports":[{"departure_date":"2026-05-01"}]}' > "$TMPROOT/test/items/bad_transport.json"
+  export ITEMS_JSON="$TMPROOT/test/items/bad_transport.json"
   assert_fail "transport missing fields" "transports[0]"
 )
 
 # T7: subsidy missing days
 (
-  echo '{"summary":"x","subsidies":[{"tool":"train","official_car_pickup":"no","hosted_by_counterparty":"no"}]}' > "$TMPDIR/no_days.json"
-  export SKILL_DIR="$SCRIPT_DIR"
-  export ERM_ACCOUNT="test"
-  export ACCOUNT_WORKSPACE="$TMPDIR"
-  export ITEMS_JSON="$TMPDIR/no_days.json"
+  setup_ws test
+  echo '{"summary":"x","subsidies":[{"tool":"火车","official_car_pickup":"否","hosted_by_counterparty":"否"}]}' > "$TMPROOT/test/items/no_days.json"
+  export ITEMS_JSON="$TMPROOT/test/items/no_days.json"
   assert_fail "subsidy missing days" "subsidies[0]"
 )
 
-# T8: attachment file not found
+# T8: invalid enum (Phase 4b)
 (
-  export SKILL_DIR="$SCRIPT_DIR"
-  export ERM_ACCOUNT="test"
-  export ACCOUNT_WORKSPACE="$TMPDIR"
-  export ITEMS_JSON="$TMPDIR/items_valid.json"
-  export ATTACHMENT_FILES="$TMPDIR/missing.pdf"
+  setup_ws test
+  echo '{"summary":"x","transports":[{"departure_date":"2026-05-01","arrival_date":"2026-05-03","vehicle":"高铁","invoice_form":"火车电子报销凭证","invoice_no":"T1","amount":"1"}]}' > "$TMPROOT/test/items/bad_enum.json"
+  export ITEMS_JSON="$TMPROOT/test/items/bad_enum.json"
+  assert_fail "invalid vehicle enum" "Phase 4b"
+)
+
+# T9: attachment file not found
+(
+  setup_ws test
+  echo "$valid_items" > "$TMPROOT/test/items/valid.json"
+  export ITEMS_JSON="$TMPROOT/test/items/valid.json"
+  export ATTACHMENT_FILES="$TMPROOT/test/attachments/missing.pdf"
   assert_fail "attachment not found" "attachment not found"
 )
 
-# T9: path isolation violation
+# T10: path isolation violation
 (
+  setup_ws test
   mkdir -p /tmp/preflight_isolation_test
   echo "$valid_items" > /tmp/preflight_isolation_test/outside.json
-  export SKILL_DIR="$SCRIPT_DIR"
-  export ERM_ACCOUNT="test"
-  export ACCOUNT_WORKSPACE="$TMPDIR"
   export ITEMS_JSON="/tmp/preflight_isolation_test/outside.json"
   assert_fail "path isolation violation" "outside ACCOUNT_WORKSPACE"
   rm -rf /tmp/preflight_isolation_test
 )
 
-# T10: subsidies only, no attachments (valid — no invoices to attach)
+# T11: subsidies only, no attachments (valid)
 (
-  echo '{"summary":"x","subsidies":[{"days":1,"tool":"train","official_car_pickup":"no","hosted_by_counterparty":"no"}]}' > "$TMPDIR/subs_only.json"
-  export SKILL_DIR="$SCRIPT_DIR"
-  export ERM_ACCOUNT="test"
-  export ACCOUNT_WORKSPACE="$TMPDIR"
-  export ITEMS_JSON="$TMPDIR/subs_only.json"
+  setup_ws test
+  echo '{"summary":"x","subsidies":[{"days":"1","tool":"火车","official_car_pickup":"否","hosted_by_counterparty":"否"}]}' > "$TMPROOT/test/items/subs_only.json"
+  export ITEMS_JSON="$TMPROOT/test/items/subs_only.json"
   assert_pass "subsidies only, no attachments"
 )
 
-# T11: all valid with existing attachment
+# T12: all valid with existing attachment
 (
-  touch "$TMPDIR/receipt.pdf"
-  export SKILL_DIR="$SCRIPT_DIR"
-  export ERM_ACCOUNT="test"
-  export ACCOUNT_WORKSPACE="$TMPDIR"
-  export ITEMS_JSON="$TMPDIR/items_valid.json"
-  export ATTACHMENT_FILES="$TMPDIR/receipt.pdf"
+  setup_ws test
+  echo "$valid_items" > "$TMPROOT/test/items/valid.json"
+  touch "$TMPROOT/test/attachments/receipt.pdf"
+  export ITEMS_JSON="$TMPROOT/test/items/valid.json"
+  export ATTACHMENT_FILES="$TMPROOT/test/attachments/receipt.pdf"
   assert_pass "valid with attachment"
 )
 
-# T12: has transport/hotel but no attachments (should fail)
+# T13: has transport but no attachments (should fail)
 (
-  export SKILL_DIR="$SCRIPT_DIR"
-  export ERM_ACCOUNT="test"
-  export ACCOUNT_WORKSPACE="$TMPDIR"
-  export ITEMS_JSON="$TMPDIR/items_valid.json"
-  assert_fail "invoices without attachments" "ATTACHMENT_FILES is not set"
+  setup_ws test
+  echo "$valid_items" > "$TMPROOT/test/items/valid.json"
+  export ITEMS_JSON="$TMPROOT/test/items/valid.json"
+  assert_fail "invoices without attachments" "neither ATTACHMENT_FILE nor ATTACHMENT_FILES"
 )
 
-# --- Summary ---
-pass=$(grep -c "^pass$" "$RESULTS")  || true
-fail=$(grep -c "^fail$" "$RESULTS")  || true
+# T14: ATTACHMENT_FILE only (valid when transport present)
+(
+  setup_ws test
+  echo "$valid_items" > "$TMPROOT/test/items/valid.json"
+  touch "$TMPROOT/test/attachments/receipt.pdf"
+  export ITEMS_JSON="$TMPROOT/test/items/valid.json"
+  export ATTACHMENT_FILE="$TMPROOT/test/attachments/receipt.pdf"
+  unset ATTACHMENT_FILES
+  assert_pass "ATTACHMENT_FILE only with transport"
+)
+
+# T15: ATTACHMENT_FILE outside workspace
+(
+  setup_ws test
+  echo "$valid_items" > "$TMPROOT/test/items/valid.json"
+  mkdir -p /tmp/preflight_att_isolation
+  touch /tmp/preflight_att_isolation/outside.pdf
+  export ITEMS_JSON="$TMPROOT/test/items/valid.json"
+  export ATTACHMENT_FILE="/tmp/preflight_att_isolation/outside.pdf"
+  assert_fail "ATTACHMENT_FILE path isolation" "outside ACCOUNT_WORKSPACE"
+  rm -rf /tmp/preflight_att_isolation
+)
+
+# T16: invalid ERM_ACCOUNT stays exit 1 (aggregated report, not exit 2)
+(
+  setup_ws test
+  echo "$valid_items" > "$TMPROOT/test/items/valid.json"
+  export ERM_ACCOUNT='../evil'
+  export ITEMS_JSON="$TMPROOT/test/items/valid.json"
+  assert_fail "invalid ERM_ACCOUNT" "plain account id"
+)
+
+pass=$(grep -c "^pass$" "$RESULTS") || true
+fail=$(grep -c "^fail$" "$RESULTS") || true
 echo ""
 echo "Results: $pass passed, $fail failed"
 [[ $fail -eq 0 ]]

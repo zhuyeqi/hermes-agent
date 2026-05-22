@@ -7,7 +7,9 @@ import unittest
 from decimal import Decimal
 from pathlib import Path
 
+SCRIPT_LIB = Path(__file__).resolve().parents[1] / "scripts" / "lib"
 SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
+sys.path.insert(0, str(SCRIPT_LIB))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from save_travel_reimbursement_from_dispatch import build_save_form, load_items_json

@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Pre-flight validation for travel reimbursement skill.
 # Checks all input data before any network or browser activity.
-# Exit 0 = all checks pass (silent); Exit 1 = errors reported to stderr.
+# Exit 0 = all checks pass (Phase 5 may warn); Exit 1 = errors reported to stderr.
 
 errors=()
 
@@ -14,16 +14,42 @@ for cmd in python3 agent-browser; do
   fi
 done
 
-# --- Phase 2: Environment variables ---
-for var in SKILL_DIR ERM_ACCOUNT ACCOUNT_WORKSPACE ITEMS_JSON; do
+# --- Phase 2: Required environment variables ---
+for var in SKILL_DIR ERM_ACCOUNT ITEMS_JSON; do
   if [[ -z "${!var:-}" ]]; then
     errors+=("[FAIL] Phase 2: $var is not set")
   fi
 done
 
-# Resolve Python env (same as run_reimbursement_pipeline.sh / login_erm.sh)
-if [[ -n "${SKILL_DIR:-}" ]] && [[ -f "${SKILL_DIR}/scripts/resolve_python_env.sh" ]]; then
-  source "${SKILL_DIR}/scripts/resolve_python_env.sh"
+# Resolve Python env + workspace paths (same as run_reimbursement_pipeline.sh / login_erm.sh)
+if [[ -n "${SKILL_DIR:-}" ]] && [[ -f "${SKILL_DIR}/scripts/lib/init.sh" ]]; then
+  # shellcheck source=lib/init.sh
+  source "${SKILL_DIR}/scripts/lib/init.sh"
+  # shellcheck source=lib/resolve_python_env.sh
+  source "${ERM_SCRIPT_LIB}/resolve_python_env.sh"
+fi
+if [[ -n "${SKILL_DIR:-}" ]] && [[ -f "${SKILL_DIR}/scripts/lib/erm_workspace.sh" ]]; then
+  # shellcheck source=lib/erm_workspace.sh
+  source "${SKILL_DIR}/scripts/lib/erm_workspace.sh"
+  if [[ -n "${ERM_ACCOUNT:-}" ]]; then
+    if [[ "$ERM_ACCOUNT" == */* || "$ERM_ACCOUNT" == *..* ]]; then
+      errors+=("[FAIL] Phase 2: ERM_ACCOUNT must be a plain account id (no / or ..)")
+    else
+      erm_resolve_workspace
+    fi
+  fi
+fi
+
+# --- Phase 1c: Browser daemon health (after workspace resolved) ---
+if command -v agent-browser &>/dev/null && [[ -n "${SKILL_DIR:-}" ]] && [[ -n "${PROFILE_DIR:-}" ]]; then
+  if ! SKILL_DIR="$SKILL_DIR" PROFILE_DIR="$PROFILE_DIR" bash "${SKILL_DIR}/scripts/check_browser_health.sh" >/dev/null 2>"${TMPDIR:-/tmp}/erm-preflight-browser.$$.json"; then
+    _bh_msg="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("message","browser health check failed"))' "${TMPDIR:-/tmp}/erm-preflight-browser.$$.json" 2>/dev/null || echo "browser health check failed")"
+    errors+=("[FAIL] Phase 1c: $_bh_msg (see stderr JSON from check_browser_health.sh)")
+    cat "${TMPDIR:-/tmp}/erm-preflight-browser.$$.json" >&2 2>/dev/null || true
+    rm -f "${TMPDIR:-/tmp}/erm-preflight-browser.$$.json"
+  else
+    rm -f "${TMPDIR:-/tmp}/erm-preflight-browser.$$.json"
+  fi
 fi
 
 # Phase 1b: httpx import check (after resolve_python_env.sh so correct python3 is on PATH)
@@ -52,7 +78,23 @@ canonical_abs_path() {
   printf '%s/%s\n' "$dir" "$base"
 }
 
-# --- Phase 3: Path isolation ---
+# --- Phase 3: Path isolation (ITEMS_JSON and attachments under ACCOUNT_WORKSPACE) ---
+if [[ -n "${ITEMS_JSON:-}" ]]; then
+  if [[ -z "${ACCOUNT_WORKSPACE:-}" ]]; then
+    errors+=("[FAIL] Phase 3: ERM_ACCOUNT must be set to resolve workspace for ITEMS_JSON")
+  elif [[ ! -d "$ACCOUNT_WORKSPACE" ]]; then
+    errors+=("[FAIL] Phase 3: workspace is not a directory ($ACCOUNT_WORKSPACE); create it (mkdir -p \"\$PWD/\${ERM_ACCOUNT}/items\") — see SKILL.md step 0)")
+  fi
+fi
+
+if [[ -n "${ATTACHMENT_FILE:-}${ATTACHMENT_FILES:-}" ]]; then
+  if [[ -z "${ACCOUNT_WORKSPACE:-}" ]]; then
+    errors+=("[FAIL] Phase 3: ERM_ACCOUNT must be set to resolve workspace for attachments")
+  elif [[ ! -d "$ACCOUNT_WORKSPACE" ]]; then
+    errors+=("[FAIL] Phase 3: workspace is not a directory ($ACCOUNT_WORKSPACE); create attachments dir — see SKILL.md step 0)")
+  fi
+fi
+
 if [[ -n "${ACCOUNT_WORKSPACE:-}" ]] && [[ -d "${ACCOUNT_WORKSPACE:-}" ]]; then
   aw_real="$(cd "${ACCOUNT_WORKSPACE}" && pwd -P)"
 
@@ -60,6 +102,13 @@ if [[ -n "${ACCOUNT_WORKSPACE:-}" ]] && [[ -d "${ACCOUNT_WORKSPACE:-}" ]]; then
     items_real="$(canonical_abs_path "$ITEMS_JSON")"
     if [[ "$items_real" != "$aw_real"/* ]]; then
       errors+=("[FAIL] Phase 3: ITEMS_JSON ($ITEMS_JSON) is outside ACCOUNT_WORKSPACE ($ACCOUNT_WORKSPACE)")
+    fi
+  fi
+
+  if [[ -n "${ATTACHMENT_FILE:-}" ]]; then
+    att_real="$(canonical_abs_path "$ATTACHMENT_FILE")"
+    if [[ "$att_real" != "$aw_real"/* ]]; then
+      errors+=("[FAIL] Phase 3: ATTACHMENT_FILE ($ATTACHMENT_FILE) is outside ACCOUNT_WORKSPACE ($ACCOUNT_WORKSPACE)")
     fi
   fi
 
@@ -124,10 +173,22 @@ for e in errs:
 PYEOF
 )
     if [[ -n "$_py4_out" ]]; then
-      while IFS= read -r _line; do
-        errors+=("$_line")
+      while IFS= read -r _line || [[ -n "${_line:-}" ]]; do
+        [[ -n "${_line:-}" ]] && errors+=("$_line")
       done <<< "$_py4_out"
     fi
+  fi
+fi
+
+# --- Phase 4b: Enum validation ---
+if [[ -n "${ITEMS_JSON:-}" ]] && [[ -f "${ITEMS_JSON:-}" ]] && [[ -n "${SKILL_DIR:-}" ]]; then
+  if ! python3 "${SKILL_DIR}/scripts/validate_travel_items_enums.py" \
+    --items-json "$ITEMS_JSON" 2>"${TMPDIR:-/tmp}/erm-preflight-enums.$$.json"; then
+    errors+=("[FAIL] Phase 4b: items enum validation failed")
+    cat "${TMPDIR:-/tmp}/erm-preflight-enums.$$.json" >&2 2>/dev/null || true
+    rm -f "${TMPDIR:-/tmp}/erm-preflight-enums.$$.json"
+  else
+    rm -f "${TMPDIR:-/tmp}/erm-preflight-enums.$$.json"
   fi
 fi
 
@@ -143,17 +204,32 @@ print(n)
   if [[ "$_invoice_count" -gt 0 ]]; then _has_invoices=true; fi
 fi
 
-if [[ -z "${ATTACHMENT_FILES:-}" ]]; then
-  if [[ "$_has_invoices" == true ]]; then
-    errors+=("[FAIL] Phase 5: ITEMS_JSON has transport/hotel entries but ATTACHMENT_FILES is not set")
+if [[ "$_has_invoices" == true ]]; then
+  if [[ -n "${ATTACHMENT_FILES:-}" ]]; then
+    IFS=':' read -ra _att_files <<< "$ATTACHMENT_FILES"
+    for f in "${_att_files[@]}"; do
+      if [[ ! -f "$f" ]]; then
+        errors+=("[FAIL] Phase 5: attachment not found: $f")
+      fi
+    done
+  elif [[ -n "${ATTACHMENT_FILE:-}" ]]; then
+    if [[ ! -f "$ATTACHMENT_FILE" ]]; then
+      errors+=("[FAIL] Phase 5: attachment not found: $ATTACHMENT_FILE")
+    fi
+  else
+    errors+=("[FAIL] Phase 5: ITEMS_JSON has transport/hotel entries but neither ATTACHMENT_FILE nor ATTACHMENT_FILES is set")
   fi
-else
+elif [[ -n "${ATTACHMENT_FILES:-}" ]]; then
   IFS=':' read -ra _att_files <<< "$ATTACHMENT_FILES"
   for f in "${_att_files[@]}"; do
     if [[ ! -f "$f" ]]; then
       errors+=("[FAIL] Phase 5: attachment not found: $f")
     fi
   done
+elif [[ -n "${ATTACHMENT_FILE:-}" ]]; then
+  if [[ ! -f "$ATTACHMENT_FILE" ]]; then
+    errors+=("[FAIL] Phase 5: attachment not found: $ATTACHMENT_FILE")
+  fi
 fi
 
 # --- Report ---

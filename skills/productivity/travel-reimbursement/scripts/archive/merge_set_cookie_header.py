@@ -1,3 +1,4 @@
+# NON-RUNTIME — maintainer debug only. See archive/README.md.
 from __future__ import annotations
 
 """Merge login response Set-Cookie headers into a raw Cookie request header.

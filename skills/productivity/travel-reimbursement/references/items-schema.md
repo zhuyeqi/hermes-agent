@@ -2,6 +2,8 @@
 
 `ITEMS_JSON` 文件结构。至少必须包含 `transports` / `hotels` / `subsidies` 中的一组。
 
+**枚举字段**（`vehicle`、`invoice_form`、`city_type`、`invoice_type`、`tool`、`official_car_pickup`、`hosted_by_counterparty`、`training_fee`）的显示名须与 `scripts/lib/erm_travel_enums.py` 中的 **key 完全一致**。预检 Phase 4b 与 `validate_travel_items_enums.py` 为唯一枚举校验入口；save 脚本仅做 PK 映射。
+
 ## 顶层
 
 | 字段 | 必填 | 写入 | 说明 |
