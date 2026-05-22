@@ -26,7 +26,7 @@ requires:
 | `ERM_ACCOUNT` | 是 | — | ERM 账号（登录用户名 + 工作空间目录名）；工作空间固定为 `$PWD/${ERM_ACCOUNT}`，profile 为 `$PWD/${ERM_ACCOUNT}/browser-profile`（脚本推导，勿手设） |
 | `ERM_PASSWORD` | 登录时 | — | 仅 `login_erm.sh` 需要；跑完后 `unset` |
 | `ITEMS_JSON` | 是 | — | 差旅明细 JSON 路径（预检和 pipeline 共用；须在 workspace 内） |
-| `DRY_RUN` | 否 | `0` | `1` = 只构造 payload 不提交 |
+| `DRY_RUN` | 否 | `0` | 仅字符串 `1` 跳过 POST；`0` = 先 dry-run 再真实提交；其它非空值（如 `true`）与 `0` 相同会 POST |
 | `COOKIE` | 否 | 从 profile 导出 | 手动指定时仍须通过 Gate.A 探针 |
 | `ATTACHMENT_FILE` | 否 | — | 单附件，须在 workspace 内 |
 | `ATTACHMENT_FILES` | 否 | — | 多附件（`:` 分隔），须在 workspace 内；优先于 `ATTACHMENT_FILE` |
@@ -113,11 +113,21 @@ unset ERM_PASSWORD
 ### 4) 执行 pipeline
 
 ```bash
-export DRY_RUN=0
+export DRY_RUN=0   # 真实提交 savebill；仅试跑 payload 时用 DRY_RUN=1
 "$SKILL_DIR/scripts/run_reimbursement_pipeline.sh"
 ```
 
-脚本结束会在 stderr 打印 `Artifacts in: <RUN_DIR>`，含 `dispatch.json`、`defaults.json`、`attachment_*.json`（若有）、`save_form.json`、`save_result.json`。
+**`DRY_RUN` 行为（与 `reimbursement-process-unified` 一致）：**
+
+| 值 | save 阶段 |
+|----|-----------|
+| `0`（默认） | 先 `--dry-run` 生成 `save_dry_run.json` + `save_form.json`，再 **POST** `/iwebap/jkbx_maintain_ctr/savebill` → `save_result.json` |
+| `1` | 仅 dry-run，复制为 `save_result.json` 后退出，**不** POST |
+| 其它非空值 | 与 `0` 相同（脚本只判断 `[[ "$DRY_RUN" == "1" ]]`） |
+
+前置步骤（菜单 URL、浏览器抓 dispatch、附件上传）在两种模式下都会访问真实 ERM；只有最后保存受 `DRY_RUN` 控制。
+
+脚本结束会在 stderr 打印 `Artifacts in: <RUN_DIR>`，含 `dispatch.json`、`defaults.json`、`attachment_*.json`（若有）、`save_form.json`、`save_dry_run.json`、`save_result.json`。
 
 ## 附录
 

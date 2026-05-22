@@ -14,13 +14,13 @@ set -euo pipefail
 #   COOKIE            - raw Cookie header; if unset, exported from profile after Gate.A
 #   ATTACHMENT_FILE   - optional single local file path
 #   ATTACHMENT_FILES  - optional colon-separated absolute paths (takes precedence)
-#   DRY_RUN           - "1" to only build payload (default: 0)
+#   DRY_RUN           - "1" = build payload only (no savebill POST); "0" = dry-run then real save (default: 0)
 #
 # Derived (do not set): ACCOUNT_WORKSPACE=$PWD/${ERM_ACCOUNT}, PROFILE_DIR=.../browser-profile
 #
 # Output artifacts in RUN_DIR:
 #   cdp_cookies.json, menu_url.json, dispatch.json, defaults.json,
-#   attachment_*.json, save_form.json, save_result.json
+#   attachment_*.json, save_form.json, save_dry_run.json, save_result.json
 
 die() {
   echo "ERROR: $*" >&2
@@ -292,13 +292,27 @@ PY
 fi
 
 step "save_bill"
+save_args=(
+  --cookie "$COOKIE"
+  --dispatch-json "$RUN_DIR/dispatch.json"
+  --items-json "$ITEMS_JSON"
+  --accessorybillid "$accessorybillid"
+  --save-form-out "$RUN_DIR/save_form.json"
+)
+
 python3 "${ERM_SCRIPT_ROOT}/save_travel_reimbursement_from_dispatch.py" \
-  --cookie "$COOKIE" \
-  --dispatch-json "$RUN_DIR/dispatch.json" \
-  --items-json "$ITEMS_JSON" \
-  --accessorybillid "$accessorybillid" \
-  --save-form-out "$RUN_DIR/save_form.json" \
-  ${DRY_RUN:+--dry-run} \
+  "${save_args[@]}" \
+  --dry-run > "$RUN_DIR/save_dry_run.json"
+
+if [[ "$DRY_RUN" == "1" ]]; then
+  cp "$RUN_DIR/save_dry_run.json" "$RUN_DIR/save_result.json"
+  step "dry_run_only done"
+  echo "Artifacts in: $RUN_DIR" >&2
+  exit 0
+fi
+
+python3 "${ERM_SCRIPT_ROOT}/save_travel_reimbursement_from_dispatch.py" \
+  "${save_args[@]}" \
   > "$RUN_DIR/save_result.json"
 
 python3 - <<PY

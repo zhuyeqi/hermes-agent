@@ -63,6 +63,25 @@ def _sample_items() -> dict:
     }
 
 
+def test_pipeline_dry_run_does_not_use_bash_parameter_expansion_trap():
+    """DRY_RUN=0 must not expand to --dry-run via ${DRY_RUN:+--dry-run}."""
+    pipeline = SCRIPTS / "run_reimbursement_pipeline.sh"
+    text = pipeline.read_text(encoding="utf-8")
+    assert "${DRY_RUN:+--dry-run}" not in text
+    assert '[[ "$DRY_RUN" == "1" ]]' in text
+
+
+def test_pipeline_save_bill_two_phase_like_unified():
+    pipeline = SCRIPTS / "run_reimbursement_pipeline.sh"
+    text = pipeline.read_text(encoding="utf-8")
+    save_section = text.split('step "save_bill"', 1)[1].split("python3 - <<PY", 1)[0]
+    assert "save_dry_run.json" in save_section
+    assert save_section.count("save_travel_reimbursement_from_dispatch.py") == 2
+    assert save_section.count("--dry-run") == 1
+    after_dry_only_branch = save_section.split('[[ "$DRY_RUN" == "1" ]]', 1)[1]
+    assert "--dry-run" not in after_dry_only_branch
+
+
 def test_validate_travel_items_enums_standalone_import():
     """Runnable without sourcing init.sh (SKILL documents direct invocation)."""
     proc = subprocess.run(
