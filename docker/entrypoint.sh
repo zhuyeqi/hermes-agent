@@ -66,6 +66,37 @@ fi
 # --- Running as hermes from here ---
 source "${INSTALL_DIR}/.venv/bin/activate"
 
+# --- Virtual desktop (Xvfb) for headed Chromium ---
+# Legacy systems (SAP, etc.) block headless browsers via webdriver detection.
+# Xvfb provides a virtual X11 display so Chromium runs in full headed mode.
+if [ -n "${DISPLAY:-}" ] && command -v Xvfb >/dev/null 2>&1; then
+    xvfb_resolution="${HERMES_XVFB_RESOLUTION:-1920x1080x24}"
+    xvfb_display="${DISPLAY#:}"  # strip leading ":"
+    xvfb_lock="/tmp/.X${xvfb_display}-lock"
+
+    if [ ! -f "$xvfb_lock" ] || ! kill -0 "$(cat "$xvfb_lock" 2>/dev/null)" 2>/dev/null; then
+        echo "Starting Xvfb on ${DISPLAY} (${xvfb_resolution})"
+        mkdir -p /tmp/.X11-unix
+        Xvfb "$DISPLAY" -screen 0 "$xvfb_resolution" -ac -noreset &
+        for _ in $(seq 1 50); do
+            [ -S "/tmp/.X11-unix/X${xvfb_display}" ] && break
+            sleep 0.1
+        done
+
+        if command -v fluxbox >/dev/null 2>&1; then
+            fluxbox -display "$DISPLAY" 2>/dev/null &
+        fi
+    fi
+    export DISPLAY
+
+    vnc_port="${HERMES_VNC_PORT:-0}"
+    if [ "$vnc_port" != "0" ] && command -v x11vnc >/dev/null 2>&1; then
+        echo "Starting x11vnc on port ${vnc_port} for remote browser debugging"
+        x11vnc -display "$DISPLAY" -rfbport "$vnc_port" -forever -shared -nopw -bg 
+            -o "$HERMES_HOME/logs/x11vnc.log"
+    fi
+fi
+
 # Auto-detected browser path (written by Dockerfile build).
 if [ -f /etc/profile.d/hermes-browser.sh ]; then
     source /etc/profile.d/hermes-browser.sh

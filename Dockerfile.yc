@@ -8,12 +8,22 @@ ENV PYTHONUNBUFFERED=1
 # install survives the /opt/data volume overlay at runtime.
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/hermes/.playwright
 
+# Virtual desktop: run Chromium in headed mode inside Xvfb so legacy systems
+# (SAP, etc.) that block headless browsers see a "real" desktop browser.
+ENV AGENT_BROWSER_HEADED=true
+ENV DISPLAY=:99
+# Anti-detection: suppress automation indicators.
+ENV AGENT_BROWSER_CHROME_FLAGS=--disable-blink-features=AutomationControlled
+# Optional VNC for remote browser debugging (set port to enable, e.g. 5900).
+ENV HERMES_VNC_PORT=0
+
 RUN sed -i 's|http://deb.debian.org/debian|http://mirrors.aliyun.com/debian|g; s|http://security.debian.org/debian-security|http://mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list.d/debian.sources
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         build-essential nodejs npm python3 ripgrep ffmpeg python3-dev libffi-dev curl \
-        procps git openssh-client docker-cli poppler-utils tini ca-certificates && \
+        procps git openssh-client docker-cli poppler-utils tini ca-certificates \
+        xvfb fluxbox x11vnc && \
     rm -rf /var/lib/apt/lists/*
 
 RUN useradd -u 10000 -m -d /opt/data hermes
@@ -32,15 +42,15 @@ COPY ui-tui/packages/hermes-ink/ ui-tui/packages/hermes-ink/
 ENV npm_config_install_links=false
 
 RUN npm install --prefer-offline --no-audit && \
-    npx playwright install --with-deps chromium --only-shell && \
+    npx playwright install --with-deps chromium && \
     npm install -g --prefer-offline --no-audit agent-browser && \
     (cd web && npm install --prefer-offline --no-audit) && \
     (cd ui-tui && npm install --prefer-offline --no-audit) && \
     npm cache clean --force
 
-# Point agent-browser to the Playwright-installed headless shell.
+# Point agent-browser to the Playwright-installed Chromium.
 # Resolved dynamically so it survives Playwright version bumps.
-RUN _BROWSER=$(find /opt/hermes/.playwright -name chrome-headless-shell -type f | head -1) && \
+RUN _BROWSER=$(find /opt/hermes/.playwright -name chrome -type f | head -1) && \
     echo "AGENT_BROWSER_EXECUTABLE_PATH=${_BROWSER}" >> /etc/environment && \
     echo "export AGENT_BROWSER_EXECUTABLE_PATH=${_BROWSER}" > /etc/profile.d/hermes-browser.sh
 
@@ -51,6 +61,9 @@ RUN cd web && npm run build && \
     cd ../ui-tui && npm run build
 
 # ---------- Python virtualenv ----------
+# Use Aliyun mirror for faster downloads in China, with PyPI as fallback.
+ENV UV_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+ENV UV_EXTRA_INDEX_URL=https://pypi.org/simple/
 RUN uv venv && \
     uv pip install --no-cache-dir -e ".[all]" && \
     uv pip install --no-cache-dir httpx && \
@@ -58,21 +71,22 @@ RUN uv venv && \
 
 # ---------- Build artifact cleanup ----------
 # Purge compilers and headers only needed during pip/uv install.
-# Strip Python bytecode to save space.
+# Strip Python bytecode and unused GPU driver files to save space.
 RUN apt-get update && \
     apt-get purge -y build-essential python3-dev libffi-dev gcc g++ make dpkg-dev && \
     apt-get autoremove -y --purge && \
     rm -rf /var/lib/apt/lists/* && \
     find /opt/hermes/.venv -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null; \
     find /opt/hermes/.venv -name '*.pyc' -delete 2>/dev/null; \
+    find /usr/lib -name 'libLLVM-*.so*' -delete 2>/dev/null; \
+    find /usr/lib -path '*/dri/*' -name '*_video.so' -delete 2>/dev/null; \
+    find /usr/lib -path '*/gallium-pipe/*' -delete 2>/dev/null; \
     true
 
 # ---------- Permissions ----------
 # Must run AFTER venv creation so .venv/ is also world-readable.
 RUN chmod -R a+rX /opt/hermes
 
-# Source the auto-detected browser path so agent-browser finds Chromium.
-# entrypoint.sh runs `source /etc/profile.d/hermes-browser.sh` to pick this up.
 ENV HERMES_WEB_DIST=/opt/hermes/hermes_cli/web_dist
 ENV HERMES_HOME=/opt/data
 ENV PATH="/opt/hermes/.venv/bin:/opt/hermes/node_modules/.bin:/opt/data/.local/bin:${PATH}"
