@@ -23,7 +23,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         build-essential nodejs npm python3 ripgrep ffmpeg python3-dev libffi-dev curl \
         procps git openssh-client docker-cli poppler-utils tini ca-certificates \
-        xvfb fluxbox x11vnc && \
+        xvfb fluxbox x11vnc fonts-noto-cjk-extra && \
     rm -rf /var/lib/apt/lists/*
 
 RUN useradd -u 10000 -m -d /opt/data hermes
