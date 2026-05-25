@@ -66,6 +66,11 @@ fi
 # --- Running as hermes from here ---
 source "${INSTALL_DIR}/.venv/bin/activate"
 
+# Auto-detected browser path (written by Dockerfile build).
+if [ -f /etc/profile.d/hermes-browser.sh ]; then
+    source /etc/profile.d/hermes-browser.sh
+fi
+
 # Export XDG_RUNTIME_DIR so Chromium/Playwright can create IPC sockets.
 export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 

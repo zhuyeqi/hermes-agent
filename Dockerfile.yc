@@ -4,17 +4,16 @@ FROM debian:13.4
 
 ENV PYTHONUNBUFFERED=1
 
-# Dev image uses one system Chromium. agent-browser is installed by npm,
-# but its browser download step is intentionally skipped.
-ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
-ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
+# Store Playwright browsers outside the volume mount so the build-time
+# install survives the /opt/data volume overlay at runtime.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/hermes/.playwright
 
 RUN sed -i 's|http://deb.debian.org/debian|http://mirrors.aliyun.com/debian|g; s|http://security.debian.org/debian-security|http://mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list.d/debian.sources
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        build-essential nodejs npm python3 ripgrep ffmpeg gcc python3-dev libffi-dev curl \
-        procps git openssh-client docker-cli chromium poppler-utils tini ca-certificates && \
+        build-essential nodejs npm python3 ripgrep ffmpeg python3-dev libffi-dev curl \
+        procps git openssh-client docker-cli poppler-utils tini ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
 RUN useradd -u 10000 -m -d /opt/data hermes
@@ -32,17 +31,18 @@ COPY ui-tui/packages/hermes-ink/ ui-tui/packages/hermes-ink/
 
 ENV npm_config_install_links=false
 
-# Keep this aligned with Dockerfile: install repo JS dependencies and web
-# dependencies before copying source so cache survives source edits.
-# Install the agent-browser CLI explicitly so this dev image does not depend
-# on package.json declaring it. Do not run `agent-browser install` or
-# `playwright install`; both download browser binaries. The image relies on
-# apt's single /usr/bin/chromium.
 RUN npm install --prefer-offline --no-audit && \
+    npx playwright install --with-deps chromium --only-shell && \
     npm install -g --prefer-offline --no-audit agent-browser && \
     (cd web && npm install --prefer-offline --no-audit) && \
     (cd ui-tui && npm install --prefer-offline --no-audit) && \
     npm cache clean --force
+
+# Point agent-browser to the Playwright-installed headless shell.
+# Resolved dynamically so it survives Playwright version bumps.
+RUN _BROWSER=$(find /opt/hermes/.playwright -name chrome-headless-shell -type f | head -1) && \
+    echo "AGENT_BROWSER_EXECUTABLE_PATH=${_BROWSER}" >> /etc/environment && \
+    echo "export AGENT_BROWSER_EXECUTABLE_PATH=${_BROWSER}" > /etc/profile.d/hermes-browser.sh
 
 # ---------- Source code ----------
 COPY --chown=hermes:hermes . .
@@ -52,14 +52,27 @@ RUN cd web && npm run build && \
 
 # ---------- Python virtualenv ----------
 RUN uv venv && \
-    uv pip install --no-cache-dir -e ".[modal,daytona,vercel,messaging,cron,cli,dev,tts-premium,slack,pty,honcho,mcp,homeassistant,sms,acp,voice,dingtalk,feishu,google,bedrock,web]" && \
+    uv pip install --no-cache-dir -e ".[all]" && \
     uv pip install --no-cache-dir httpx && \
-    uv pip install --no-cache-dir pymupdf pymupdf4llm defusedxml "markitdown[pptx]"
+    uv pip install --no-cache-dir pymupdf
+
+# ---------- Build artifact cleanup ----------
+# Purge compilers and headers only needed during pip/uv install.
+# Strip Python bytecode to save space.
+RUN apt-get update && \
+    apt-get purge -y build-essential python3-dev libffi-dev gcc g++ make dpkg-dev && \
+    apt-get autoremove -y --purge && \
+    rm -rf /var/lib/apt/lists/* && \
+    find /opt/hermes/.venv -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null; \
+    find /opt/hermes/.venv -name '*.pyc' -delete 2>/dev/null; \
+    true
 
 # ---------- Permissions ----------
 # Must run AFTER venv creation so .venv/ is also world-readable.
 RUN chmod -R a+rX /opt/hermes
 
+# Source the auto-detected browser path so agent-browser finds Chromium.
+# entrypoint.sh runs `source /etc/profile.d/hermes-browser.sh` to pick this up.
 ENV HERMES_WEB_DIST=/opt/hermes/hermes_cli/web_dist
 ENV HERMES_HOME=/opt/data
 ENV PATH="/opt/hermes/.venv/bin:/opt/hermes/node_modules/.bin:/opt/data/.local/bin:${PATH}"
