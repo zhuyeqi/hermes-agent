@@ -66,6 +66,27 @@ fi
 # --- Running as hermes from here ---
 source "${INSTALL_DIR}/.venv/bin/activate"
 
+# Playwright chromium: install if missing (stale hermes-agent-src volume), then revision symlink.
+_hermes_playwright_root="${PLAYWRIGHT_BROWSERS_PATH:-/opt/hermes/.playwright}"
+if ! ls -d "${_hermes_playwright_root}"/chromium-* >/dev/null 2>&1; then
+    echo "No chromium-* under ${_hermes_playwright_root}; running playwright install chromium..."
+    if [ ! -f "${INSTALL_DIR}/package.json" ]; then
+        echo "ERROR: ${INSTALL_DIR}/package.json missing — hermes-agent-src volume may hide image install. Rebuild image and recreate volume (see Yunyi README «Headless browser»)." >&2
+        exit 1
+    fi
+    (cd "${INSTALL_DIR}" && npx playwright install chromium) || {
+        echo "ERROR: playwright install chromium failed" >&2
+        exit 1
+    }
+fi
+if [ -x /usr/local/bin/ensure-playwright-chromium-link.sh ]; then
+    ensure-playwright-chromium-link.sh || exit 1
+fi
+_BROWSER="$(find "${_hermes_playwright_root}" -name chrome -type f 2>/dev/null | head -1)"
+if [ -n "$_BROWSER" ]; then
+    export AGENT_BROWSER_EXECUTABLE_PATH="$_BROWSER"
+fi
+
 # --- Virtual desktop (Xvfb) for headed Chromium ---
 # Legacy systems (SAP, etc.) block headless browsers via webdriver detection.
 # Xvfb provides a virtual X11 display so Chromium runs in full headed mode.

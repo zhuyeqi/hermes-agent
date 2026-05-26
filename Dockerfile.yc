@@ -7,6 +7,7 @@ ENV PYTHONUNBUFFERED=1
 # Store Playwright browsers outside the volume mount so the build-time
 # install survives the /opt/data volume overlay at runtime.
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/hermes/.playwright
+ENV PLAYWRIGHT_CHROMIUM_REVISION=1217
 
 # Virtual desktop: run Chromium in headed mode inside Xvfb so legacy systems
 # (SAP, etc.) that block headless browsers see a "real" desktop browser.
@@ -41,15 +42,20 @@ COPY ui-tui/packages/hermes-ink/ ui-tui/packages/hermes-ink/
 
 ENV npm_config_install_links=false
 
-RUN npm install --prefer-offline --no-audit && \
+RUN npm ci --prefer-offline --no-audit && \
     npx playwright install --with-deps chromium && \
     npm install -g --prefer-offline --no-audit agent-browser && \
-    (cd web && npm install --prefer-offline --no-audit) && \
-    (cd ui-tui && npm install --prefer-offline --no-audit) && \
+    (cd web && npm ci --prefer-offline --no-audit) && \
+    (cd ui-tui && npm ci --prefer-offline --no-audit) && \
     npm cache clean --force
 
-# Point agent-browser to the Playwright-installed Chromium.
-# Resolved dynamically so it survives Playwright version bumps.
+COPY docker/ensure-playwright-chromium-link.sh /usr/local/bin/ensure-playwright-chromium-link.sh
+RUN chmod +x /usr/local/bin/ensure-playwright-chromium-link.sh && \
+    PLAYWRIGHT_CHROMIUM_REVISION="${PLAYWRIGHT_CHROMIUM_REVISION:-1217}" \
+    ensure-playwright-chromium-link.sh && \
+    test -n "$(find /opt/hermes/.playwright -name chrome -type f 2>/dev/null | head -1)"
+
+# Point agent-browser to the Playwright-installed Chromium (dynamic path for runtime).
 RUN _BROWSER=$(find /opt/hermes/.playwright -name chrome -type f | head -1) && \
     echo "AGENT_BROWSER_EXECUTABLE_PATH=${_BROWSER}" >> /etc/environment && \
     echo "export AGENT_BROWSER_EXECUTABLE_PATH=${_BROWSER}" > /etc/profile.d/hermes-browser.sh
