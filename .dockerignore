@@ -22,6 +22,7 @@ ui-tui/packages/hermes-ink/dist/
 .env
 
 *.md
+!docker/webwright/**/*.md
 
 # macOS
 .DS_Store
@@ -48,3 +49,8 @@ data/
 # Compose/profile runtime state (bind-mounted; avoid ownership/secret issues)
 hermes-config/
 runtime/
+
+# Optional local Webwright checkout for Dockerfile.yc.
+# Leave ignored by git; include in Docker build context when present.
+!docker/webwright/
+!docker/webwright/**

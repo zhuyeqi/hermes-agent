@@ -68,6 +68,10 @@ web/public/ds-assets/
 .release_notes.md
 mini-swe-agent/
 
+# Optional local Webwright checkout used by Dockerfile.yc builds.
+docker/webwright/*
+!docker/webwright/.gitkeep
+
 # Nix
 .direnv/
 .nix-stamps/

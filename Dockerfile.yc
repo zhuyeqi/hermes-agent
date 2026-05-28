@@ -23,7 +23,8 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         build-essential nodejs npm python3 ripgrep ffmpeg python3-dev libffi-dev curl \
         procps git openssh-client docker-cli poppler-utils tini ca-certificates \
-        xvfb fluxbox x11vnc fonts-noto-cjk-extra && \
+        xvfb fluxbox x11vnc fonts-noto-cjk-extra \
+        libgtk-3-0t64 libgbm1 libasound2 && \
     rm -rf /var/lib/apt/lists/*
 
 RUN useradd -u 10000 -m -d /opt/data hermes
@@ -42,17 +43,11 @@ COPY ui-tui/packages/hermes-ink/ ui-tui/packages/hermes-ink/
 ENV npm_config_install_links=false
 
 RUN npm ci --prefer-offline --no-audit && \
-    npx playwright install --with-deps chromium && \
+    npx playwright install-deps chromium firefox && \
     npm install -g --prefer-offline --no-audit agent-browser && \
     (cd web && npm ci --prefer-offline --no-audit) && \
     (cd ui-tui && npm ci --prefer-offline --no-audit) && \
-    npm cache clean --force && \
-    test -n "$(find /opt/hermes/.playwright -name chrome -type f 2>/dev/null | head -1)"
-
-# Point agent-browser to the Playwright-installed Chromium (dynamic path for runtime).
-RUN _BROWSER=$(find /opt/hermes/.playwright -name chrome -type f | head -1) && \
-    echo "AGENT_BROWSER_EXECUTABLE_PATH=${_BROWSER}" >> /etc/environment && \
-    echo "export AGENT_BROWSER_EXECUTABLE_PATH=${_BROWSER}" > /etc/profile.d/hermes-browser.sh
+    npm cache clean --force
 
 # ---------- Source code ----------
 COPY --chown=hermes:hermes . .
@@ -64,19 +59,31 @@ RUN cd web && npm run build && \
 # Use Aliyun mirror for faster downloads in China, with PyPI as fallback.
 ENV UV_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 ENV UV_EXTRA_INDEX_URL=https://pypi.org/simple/
-RUN uv venv && \
-    uv pip install --no-cache-dir -e ".[all]" && \
-    uv pip install --no-cache-dir httpx && \
-    uv pip install --no-cache-dir pymupdf
+ENV VIRTUAL_ENV=/opt/hermes/.venv
+ENV PYTHONNOUSERSITE=1
+ENV PATH="${VIRTUAL_ENV}/bin:/opt/hermes/node_modules/.bin:/opt/data/.local/bin:${PATH}"
+RUN uv venv "${VIRTUAL_ENV}" && \
+    uv pip install --no-cache-dir -e ".[yc]"
 
 # ---------- Webwright browser agent skill ----------
-# Clone to /opt/webwright (outside the hermes-agent-src volume mount)
-# so source + skill files persist across image rebuilds.
-RUN git clone --depth 1 https://github.com/microsoft/Webwright.git /opt/webwright && \
-    . .venv/bin/activate && \
-    uv pip install --no-cache-dir /opt/webwright && \
-    python -m playwright install chromium firefox && \
+# Use a local checkout from docker/webwright/ when present; otherwise clone.
+# Keep source outside the hermes-agent-src volume mount so source + skill
+# files persist across image rebuilds.
+COPY docker/webwright/ /tmp/webwright-local/
+RUN if [ -f /tmp/webwright-local/pyproject.toml ]; then \
+        mv /tmp/webwright-local /opt/webwright; \
+    else \
+        rm -rf /tmp/webwright-local && \
+        git clone --depth 1 https://github.com/microsoft/Webwright.git /opt/webwright; \
+    fi && \
+    uv pip install --python "${VIRTUAL_ENV}/bin/python" --no-cache-dir /opt/webwright "playwright==1.60.0" && \
+    "${VIRTUAL_ENV}/bin/python" -m playwright install chromium firefox && \
     rm -rf /opt/webwright/.git
+
+# Point agent-browser to the Playwright-installed Chromium (dynamic path for runtime).
+RUN _BROWSER=$(find /opt/hermes/.playwright -name chrome -type f | head -1) && \
+    echo "AGENT_BROWSER_EXECUTABLE_PATH=${_BROWSER}" >> /etc/environment && \
+    echo "export AGENT_BROWSER_EXECUTABLE_PATH=${_BROWSER}" > /etc/profile.d/hermes-browser.sh
 
 # ---------- Build artifact cleanup ----------
 # Purge compilers and headers only needed during pip/uv install.
@@ -98,7 +105,6 @@ RUN chmod -R a+rX /opt/hermes
 
 ENV HERMES_WEB_DIST=/opt/hermes/hermes_cli/web_dist
 ENV HERMES_HOME=/opt/data
-ENV PATH="/opt/hermes/.venv/bin:/opt/hermes/node_modules/.bin:/opt/data/.local/bin:${PATH}"
 VOLUME [ "/opt/data" ]
 
 ENTRYPOINT [ "/usr/bin/tini", "-g", "--", "/opt/hermes/docker/entrypoint.sh" ]

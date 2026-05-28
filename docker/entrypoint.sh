@@ -66,16 +66,17 @@ fi
 # --- Running as hermes from here ---
 source "${INSTALL_DIR}/.venv/bin/activate"
 
-# Playwright chromium: install if missing (stale hermes-agent-src volume).
+# Playwright browsers: install if missing (stale hermes-agent-src volume).
 _hermes_playwright_root="${PLAYWRIGHT_BROWSERS_PATH:-/opt/hermes/.playwright}"
-if ! ls -d "${_hermes_playwright_root}"/chromium-* >/dev/null 2>&1; then
-    echo "No chromium-* under ${_hermes_playwright_root}; running playwright install chromium..."
+if ! ls -d "${_hermes_playwright_root}"/chromium-* >/dev/null 2>&1 || \
+   ! ls -d "${_hermes_playwright_root}"/firefox-* >/dev/null 2>&1; then
+    echo "Missing Playwright browser under ${_hermes_playwright_root}; running playwright install chromium firefox..."
     if [ ! -f "${INSTALL_DIR}/package.json" ]; then
         echo "ERROR: ${INSTALL_DIR}/package.json missing — hermes-agent-src volume may hide image install. Rebuild image and recreate volume (see Yunyi README «Headless browser»)." >&2
         exit 1
     fi
-    (cd "${INSTALL_DIR}" && npx playwright install chromium) || {
-        echo "ERROR: playwright install chromium failed" >&2
+    (cd "${INSTALL_DIR}" && "${INSTALL_DIR}/.venv/bin/python" -m playwright install chromium firefox) || {
+        echo "ERROR: playwright install chromium firefox failed" >&2
         exit 1
     }
 fi
@@ -155,9 +156,9 @@ fi
 # Webwright: reinstall if venv was overwritten by stale named volume.
 # Source stays at /opt/webwright (outside volume); only the pip package
 # in .venv may be lost when hermes-agent-src volume replaces /opt/hermes.
-if ! python3 -c "import webwright" 2>/dev/null; then
+if ! "${INSTALL_DIR}/.venv/bin/python" -c "import webwright" 2>/dev/null; then
     echo "Webwright missing from venv (stale volume); reinstalling..."
-    uv pip install --no-cache-dir /opt/webwright 2>/dev/null || \
+    uv pip install --python "${INSTALL_DIR}/.venv/bin/python" --no-cache-dir /opt/webwright "playwright==1.60.0" 2>/dev/null || \
         echo "Warning: Webwright reinstall failed — skill unavailable"
 fi
 
