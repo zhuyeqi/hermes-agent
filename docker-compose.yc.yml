@@ -38,7 +38,6 @@ services:
       DISPLAY: ${HERMES_AGENT_DISPLAY:-:99}
       HERMES_XVFB_RESOLUTION: ${HERMES_XVFB_RESOLUTION:-1920x1080x24}
       PLAYWRIGHT_BROWSERS_PATH: /opt/hermes/.playwright
-      PLAYWRIGHT_CHROMIUM_REVISION: ${PLAYWRIGHT_CHROMIUM_REVISION:-1217}
     command: ["gateway", "run"]
 
   dashboard:

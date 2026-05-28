@@ -66,7 +66,7 @@ fi
 # --- Running as hermes from here ---
 source "${INSTALL_DIR}/.venv/bin/activate"
 
-# Playwright chromium: install if missing (stale hermes-agent-src volume), then revision symlink.
+# Playwright chromium: install if missing (stale hermes-agent-src volume).
 _hermes_playwright_root="${PLAYWRIGHT_BROWSERS_PATH:-/opt/hermes/.playwright}"
 if ! ls -d "${_hermes_playwright_root}"/chromium-* >/dev/null 2>&1; then
     echo "No chromium-* under ${_hermes_playwright_root}; running playwright install chromium..."
@@ -78,9 +78,6 @@ if ! ls -d "${_hermes_playwright_root}"/chromium-* >/dev/null 2>&1; then
         echo "ERROR: playwright install chromium failed" >&2
         exit 1
     }
-fi
-if [ -x /usr/local/bin/ensure-playwright-chromium-link.sh ]; then
-    ensure-playwright-chromium-link.sh || exit 1
 fi
 _BROWSER="$(find "${_hermes_playwright_root}" -name chrome -type f 2>/dev/null | head -1)"
 if [ -n "$_BROWSER" ]; then
