@@ -23,6 +23,25 @@ ui-tui/packages/hermes-ink/dist/
 
 *.md
 
+# macOS
+.DS_Store
+**/.DS_Store
+
+# IDE / editor
+.idea/
+.vscode/
+.cursor/
+
+# Claude / agent artifacts
+.claude/
+.remember/
+.plans/
+.tmp-hermes-home/
+
+# Test / debug
+.pytest_cache/
+tests/
+
 # Runtime data (bind-mounted at /opt/data; must not leak into build context)
 data/
 
