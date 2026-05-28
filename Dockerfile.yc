@@ -75,6 +75,15 @@ RUN uv venv && \
     uv pip install --no-cache-dir httpx && \
     uv pip install --no-cache-dir pymupdf
 
+# ---------- Webwright browser agent skill ----------
+# Clone to /opt/webwright (outside the hermes-agent-src volume mount)
+# so source + skill files persist across image rebuilds.
+RUN git clone --depth 1 https://github.com/microsoft/Webwright.git /opt/webwright && \
+    . .venv/bin/activate && \
+    uv pip install --no-cache-dir /opt/webwright && \
+    python -m playwright install chromium firefox && \
+    rm -rf /opt/webwright/.git
+
 # ---------- Build artifact cleanup ----------
 # Purge compilers and headers only needed during pip/uv install.
 # Strip Python bytecode and unused GPU driver files to save space.

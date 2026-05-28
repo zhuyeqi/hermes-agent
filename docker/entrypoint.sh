@@ -155,6 +155,22 @@ if [ -d "$INSTALL_DIR/skills" ]; then
     python3 "$INSTALL_DIR/tools/skills_sync.py"
 fi
 
+# Webwright: reinstall if venv was overwritten by stale named volume.
+# Source stays at /opt/webwright (outside volume); only the pip package
+# in .venv may be lost when hermes-agent-src volume replaces /opt/hermes.
+if ! python3 -c "import webwright" 2>/dev/null; then
+    echo "Webwright missing from venv (stale volume); reinstalling..."
+    uv pip install --no-cache-dir /opt/webwright 2>/dev/null || \
+        echo "Warning: Webwright reinstall failed — skill unavailable"
+fi
+
+# Webwright skill: symlink into Hermes skills directory.
+# Official integration per https://github.com/microsoft/Webwright#hermes-agent
+if [ -d /opt/webwright/skills/webwright ] && [ ! -e "$HERMES_HOME/skills/webwright" ]; then
+    ln -s /opt/webwright/skills/webwright "$HERMES_HOME/skills/webwright"
+    echo "Linked Webwright skill"
+fi
+
 # Optionally start `hermes dashboard` as a side-process.
 #
 # Toggled by HERMES_DASHBOARD=1 (also accepts "true"/"yes", case-insensitive).
