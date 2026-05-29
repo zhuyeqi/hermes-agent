@@ -1,7 +1,15 @@
+# ---------- Source stages ----------
 FROM ghcr.io/astral-sh/uv:0.11.6-python3.13-trixie@sha256:b3c543b6c4f23a5f2df22866bd7857e5d304b67a564f4feab6ac22044dde719b AS uv_source
-FROM tianon/gosu:1.19-trixie@sha256:3b176695959c71e123eb390d427efc665eeb561b1540e82679c15e992006b8b9 AS gosu_source
+# Node 22 LTS source stage. Debian trixie's bundled nodejs is pinned to 20.x
+# which reached EOL in April 2026 — we copy node + npm + corepack from the
+# upstream node:22 image instead. Bookworm-based slim image used so the
+# produced binary links against glibc 2.36, which runs cleanly on our
+# Debian 13 (trixie, glibc 2.41) runtime.
+FROM node:22-bookworm-slim@sha256:7af03b14a13c8cdd38e45058fd957bf00a72bbe17feac43b1c15a689c029c732 AS node_source
+
 FROM debian:13.4
 
+# Disable Python stdout buffering to ensure logs are printed immediately.
 ENV PYTHONUNBUFFERED=1
 
 # Store Playwright browsers outside the volume mount so the build-time
@@ -17,24 +25,70 @@ ENV AGENT_BROWSER_CHROME_FLAGS=--disable-blink-features=AutomationControlled
 # Optional VNC for remote browser debugging (set port to enable, e.g. 5900).
 ENV HERMES_VNC_PORT=0
 
+# ---------- Aliyun mirrors for China ----------
 RUN sed -i 's|http://deb.debian.org/debian|http://mirrors.aliyun.com/debian|g; s|http://security.debian.org/debian-security|http://mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list.d/debian.sources
 
+# ---------- System dependencies ----------
+# Base deps match the upstream Dockerfile; yc-specific packages appended:
+#   xvfb, fluxbox, x11vnc  — virtual desktop + VNC
+#   fonts-noto-cjk-extra   — CJK font coverage for Chinese web content
+#   libgtk-3-0t64 libgbm1 libasound2 — Chromium runtime libs for headed mode
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        build-essential nodejs npm python3 ripgrep ffmpeg python3-dev libffi-dev curl \
-        procps git openssh-client docker-cli poppler-utils tini ca-certificates \
+        ca-certificates curl python3 python-is-python3 ripgrep ffmpeg \
+        gcc python3-dev libffi-dev procps git openssh-client docker-cli xz-utils \
         xvfb fluxbox x11vnc fonts-noto-cjk-extra \
         libgtk-3-0t64 libgbm1 libasound2 && \
     rm -rf /var/lib/apt/lists/*
 
+# ---------- s6-overlay install ----------
+# Verbatim from the upstream Dockerfile — provides supervision for the main
+# hermes process, the dashboard, and per-profile gateways.
+ARG TARGETARCH
+ARG S6_OVERLAY_VERSION=3.2.3.0
+ARG S6_OVERLAY_NOARCH_SHA256=b720f9d9340efc8bb07528b9743813c836e4b02f8693d90241f047998b4c53cf
+ARG S6_OVERLAY_X86_64_SHA256=a93f02882c6ed46b21e7adb5c0add86154f01236c93cd82c7d682722e8840563
+ARG S6_OVERLAY_AARCH64_SHA256=0952056ff913482163cc30e35b2e944b507ba1025d78f5becbb89367bf344581
+ARG S6_OVERLAY_SYMLINKS_SHA256=a60dc5235de3ecbcf874b9c1f18d73263ab99b289b9329aa950e8729c4789f0e
+ADD https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-noarch.tar.xz /tmp/
+ADD https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-symlinks-noarch.tar.xz /tmp/
+RUN set -eu; \
+    case "${TARGETARCH:-amd64}" in \
+        amd64) s6_arch="x86_64"; s6_arch_sha="${S6_OVERLAY_X86_64_SHA256}" ;; \
+        arm64) s6_arch="aarch64"; s6_arch_sha="${S6_OVERLAY_AARCH64_SHA256}" ;; \
+        *) echo "Unsupported TARGETARCH=${TARGETARCH} for s6-overlay" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL --retry 3 -o /tmp/s6-overlay-arch.tar.xz \
+        "https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-${s6_arch}.tar.xz"; \
+    { \
+        printf '%s  %s\n' "${S6_OVERLAY_NOARCH_SHA256}" /tmp/s6-overlay-noarch.tar.xz; \
+        printf '%s  %s\n' "${s6_arch_sha}" /tmp/s6-overlay-arch.tar.xz; \
+        printf '%s  %s\n' "${S6_OVERLAY_SYMLINKS_SHA256}" /tmp/s6-overlay-symlinks-noarch.tar.xz; \
+    } > /tmp/s6-overlay.sha256; \
+    sha256sum -c /tmp/s6-overlay.sha256; \
+    tar -C / -Jxpf /tmp/s6-overlay-noarch.tar.xz; \
+    tar -C / -Jxpf /tmp/s6-overlay-arch.tar.xz; \
+    tar -C / -Jxpf /tmp/s6-overlay-symlinks-noarch.tar.xz; \
+    rm /tmp/s6-overlay-*.tar.xz /tmp/s6-overlay.sha256
+
+# Non-root user for runtime; UID can be overridden via HERMES_UID at runtime.
 RUN useradd -u 10000 -m -d /opt/data hermes
 
-COPY --chmod=0755 --from=gosu_source /gosu /usr/local/bin/
 COPY --chmod=0755 --from=uv_source /usr/local/bin/uv /usr/local/bin/uvx /usr/local/bin/
+
+# Node 22 LTS: copy the node binary plus bundled npm + corepack from the
+# upstream image. See node_source stage at the top for the version-bump
+# rationale.
+COPY --chmod=0755 --from=node_source /usr/local/bin/node /usr/local/bin/
+COPY --from=node_source /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
+COPY --from=node_source /usr/local/lib/node_modules/corepack /usr/local/lib/node_modules/corepack
+RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
+    ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx && \
+    ln -sf /usr/local/lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack
 
 WORKDIR /opt/hermes
 
-# ---------- Layer-cached dependency install ----------
+# ---------- Layer-cached Node dependency install ----------
 COPY package.json package-lock.json ./
 COPY web/package.json web/package-lock.json web/
 COPY ui-tui/package.json ui-tui/package-lock.json ui-tui/
@@ -42,37 +96,49 @@ COPY ui-tui/packages/hermes-ink/ ui-tui/packages/hermes-ink/
 
 ENV npm_config_install_links=false
 
-RUN npm ci --prefer-offline --no-audit && \
+RUN npm install --prefer-offline --no-audit && \
     npx playwright install-deps chromium firefox && \
-    npm install -g --prefer-offline --no-audit agent-browser && \
-    (cd web && npm ci --prefer-offline --no-audit) && \
-    (cd ui-tui && npm ci --prefer-offline --no-audit) && \
-    npm cache clean --force && \
-    chmod -R a+rX /opt/hermes/node_modules /opt/hermes/web/node_modules \
-                  /opt/hermes/ui-tui/node_modules /usr/local/lib/node_modules
+    (cd web && npm install --prefer-offline --no-audit) && \
+    (cd ui-tui && npm install --prefer-offline --no-audit) && \
+    npm cache clean --force
+
+# ---------- Layer-cached Python dependency install ----------
+COPY pyproject.toml uv.lock ./
+RUN touch ./README.md
+
+# Aliyun mirror for faster downloads in China, with PyPI as fallback.
+ENV UV_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+ENV UV_EXTRA_INDEX_URL=https://pypi.org/simple/
+
+RUN uv sync --frozen --no-install-project --extra all --extra messaging --extra anthropic --extra bedrock --extra azure-identity --extra yc
 
 # ---------- Source code ----------
 COPY --chown=hermes:hermes . .
 
+# Build browser dashboard and terminal UI assets.
 RUN cd web && npm run build && \
-    cd ../ui-tui && npm run build && \
-    chmod -R a+rX /opt/hermes/hermes_cli/web_dist /opt/hermes/ui-tui/dist
+    cd ../ui-tui && npm run build
 
-# ---------- Python virtualenv ----------
-# Use Aliyun mirror for faster downloads in China, with PyPI as fallback.
-ENV UV_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
-ENV UV_EXTRA_INDEX_URL=https://pypi.org/simple/
-ENV VIRTUAL_ENV=/opt/hermes/.venv
-ENV PYTHONNOUSERSITE=1
-ENV PATH="${VIRTUAL_ENV}/bin:/opt/hermes/node_modules/.bin:/opt/data/.local/bin:${PATH}"
-RUN uv venv "${VIRTUAL_ENV}" && \
-    uv pip install --no-cache-dir -e ".[yc]" && \
-    chmod -R a+rX "${VIRTUAL_ENV}"
+# ---------- Permissions ----------
+# Make install dir world-readable so any HERMES_UID can read it at runtime.
+# The .venv MUST remain hermes-writable so lazy_deps.py can install
+# remaining optional platform packages at first use.
+USER root
+RUN chmod -R a+rX /opt/hermes && \
+    chown -R hermes:hermes /opt/hermes/.venv /opt/hermes/ui-tui /opt/hermes/node_modules
 
-# ---------- Webwright browser agent skill ----------
+# ---------- Link hermes-agent itself (editable) ----------
+RUN uv pip install --no-cache-dir --no-deps -e "."
+
+# ---------- Bake build-time git revision ----------
+ARG HERMES_GIT_SHA=
+RUN if [ -n "${HERMES_GIT_SHA}" ]; then \
+        printf '%s\n' "${HERMES_GIT_SHA}" > /opt/hermes/.hermes_build_sha && \
+        chown hermes:hermes /opt/hermes/.hermes_build_sha; \
+    fi
+
+# ---------- Webwright browser agent skill (yc-specific) ----------
 # Use a local checkout from docker/webwright/ when present; otherwise clone.
-# Keep source outside the hermes-agent-src volume mount so source + skill
-# files persist across image rebuilds.
 COPY docker/webwright/ /tmp/webwright-local/
 RUN if [ -f /tmp/webwright-local/pyproject.toml ]; then \
         mv /tmp/webwright-local /opt/webwright; \
@@ -80,21 +146,100 @@ RUN if [ -f /tmp/webwright-local/pyproject.toml ]; then \
         rm -rf /tmp/webwright-local && \
         git clone --depth 1 https://github.com/microsoft/Webwright.git /opt/webwright; \
     fi && \
-    uv pip install --python "${VIRTUAL_ENV}/bin/python" --no-cache-dir /opt/webwright "playwright==1.60.0" && \
-    "${VIRTUAL_ENV}/bin/python" -m playwright install chromium firefox && \
+    uv pip install --no-cache-dir /opt/webwright "playwright==1.60.0" && \
+    .venv/bin/python -m playwright install chromium firefox && \
     rm -rf /opt/webwright/.git && \
     chmod -R a+rX /opt/hermes/.playwright /opt/webwright
 
-# Point agent-browser to the Playwright-installed Chromium (dynamic path for runtime).
-RUN _BROWSER=$(find /opt/hermes/.playwright -name chrome -type f | head -1) && \
-    echo "AGENT_BROWSER_EXECUTABLE_PATH=${_BROWSER}" >> /etc/environment && \
-    echo "export AGENT_BROWSER_EXECUTABLE_PATH=${_BROWSER}" > /etc/profile.d/hermes-browser.sh
+# ---------- s6-overlay service wiring ----------
+# Copy shared s6 service definitions from docker/s6-rc.d/
+COPY docker/s6-rc.d/ /etc/s6-overlay/s6-rc.d/
 
-# ---------- Build artifact cleanup ----------
+# --- yc-specific s6 services (created inline, not in shared docker/) ---
+
+# Xvfb virtual display server: supervised longrun service so s6 auto-restarts
+# on crash. Runs as root (X socket creation requires it). fluxbox window
+# manager starts as a child so headed browser operations see a WM.
+RUN mkdir -p /etc/s6-overlay/s6-rc.d/xvfb/dependencies.d && \
+    printf 'longrun\n' > /etc/s6-overlay/s6-rc.d/xvfb/type && \
+    printf '' > /etc/s6-overlay/s6-rc.d/xvfb/dependencies.d/base && \
+    printf '#!/command/with-contenv sh\n\
+set -e\n\
+# Xvfb virtual display server for headed browser mode.\n\
+exec Xvfb :99 -screen 0 "${HERMES_XVFB_RESOLUTION:-1920x1080x24}" \\\n\
+    -ac -nolisten tcp 2>&1\n' > /etc/s6-overlay/s6-rc.d/xvfb/run && \
+    chmod +x /etc/s6-overlay/s6-rc.d/xvfb/run
+
+# fluxbox window manager: depends on xvfb being ready.
+RUN mkdir -p /etc/s6-overlay/s6-rc.d/fluxbox/dependencies.d && \
+    printf 'longrun\n' > /etc/s6-overlay/s6-rc.d/fluxbox/type && \
+    printf '' > /etc/s6-overlay/s6-rc.d/fluxbox/dependencies.d/xvfb && \
+    printf '#!/command/with-contenv sh\n\
+set -e\n\
+# Lightweight window manager — needed for some browser operations\n\
+# that check for a running WM.\n\
+exec fluxbox -display :99 2>&1\n' > /etc/s6-overlay/s6-rc.d/fluxbox/run && \
+    chmod +x /etc/s6-overlay/s6-rc.d/fluxbox/run
+
+# VNC server: conditional service — only starts when HERMES_VNC_PORT > 0.
+# Same pattern as the dashboard service (finish exits 125 = permanent failure
+# when disabled, preventing s6 restart loop).
+RUN mkdir -p /etc/s6-overlay/s6-rc.d/vnc/dependencies.d && \
+    printf 'longrun\n' > /etc/s6-overlay/s6-rc.d/vnc/type && \
+    printf '' > /etc/s6-overlay/s6-rc.d/vnc/dependencies.d/xvfb && \
+    printf '#!/command/with-contenv sh\n\
+set -e\n\
+case "${HERMES_VNC_PORT:-0}" in\n\
+    0|"") exit 0 ;;\n\
+esac\n\
+# Wait briefly for Xvfb to be ready.\n\
+for i in 1 2 3 4 5; do\n\
+    [ -e /tmp/.X11-unix/X99 ] && break\n\
+    sleep 0.5\n\
+done\n\
+exec x11vnc -display :99 -forever -nopw -rfbport "${HERMES_VNC_PORT}" \\\n\
+    -listen 0.0.0.0 -shared -noxdamage 2>&1\n' > /etc/s6-overlay/s6-rc.d/vnc/run && \
+    printf '#!/command/with-contenv sh\n\
+case "${HERMES_VNC_PORT:-0}" in\n\
+    0|"") exit 125 ;;\n\
+esac\n\
+exit 0\n' > /etc/s6-overlay/s6-rc.d/vnc/finish && \
+    chmod +x /etc/s6-overlay/s6-rc.d/vnc/run /etc/s6-overlay/s6-rc.d/vnc/finish
+
+# Register yc-specific services in the user bundle alongside main-hermes
+# and dashboard.
+RUN touch /etc/s6-overlay/s6-rc.d/user/contents.d/xvfb \
+      /etc/s6-overlay/s6-rc.d/user/contents.d/fluxbox \
+      /etc/s6-overlay/s6-rc.d/user/contents.d/vnc
+
+# --- cont-init.d wiring (shared scripts) ---
+RUN mkdir -p /etc/cont-init.d && \
+    printf '#!/command/with-contenv sh\nexec /opt/hermes/docker/stage2-hook.sh\n' \
+        > /etc/cont-init.d/01-hermes-setup && \
+    chmod +x /etc/cont-init.d/01-hermes-setup
+COPY --chmod=0755 docker/cont-init.d/015-supervise-perms /etc/cont-init.d/015-supervise-perms
+COPY --chmod=0755 docker/cont-init.d/02-reconcile-profiles /etc/cont-init.d/02-reconcile-profiles
+
+# ---------- Runtime ----------
+ENV HERMES_WEB_DIST=/opt/hermes/hermes_cli/web_dist
+ENV HERMES_HOME=/opt/data
+
+# `docker exec` privilege-drop shim — transparently re-exec's as hermes
+# user when invoked as root so $HERMES_HOME files stay hermes-owned.
+COPY --chmod=0755 docker/hermes-exec-shim.sh /opt/hermes/bin/hermes
+
+ENV PATH="/opt/hermes/bin:/opt/hermes/node_modules/.bin:/opt/hermes/.venv/bin:/opt/data/.local/bin:${PATH}"
+RUN mkdir -p /opt/data
+VOLUME [ "/opt/data" ]
+
+ENTRYPOINT [ "/init", "/opt/hermes/docker/main-wrapper.sh" ]
+CMD [ ]
+
+# ---------- Build artifact cleanup (yc-specific, must be last layer) ----------
 # Purge compilers and headers only needed during pip/uv install.
 # Strip Python bytecode and unused GPU driver files to save space.
 RUN apt-get update && \
-    apt-get purge -y build-essential python3-dev libffi-dev gcc g++ make dpkg-dev && \
+    apt-get purge -y gcc python3-dev libffi-dev && \
     apt-get autoremove -y --purge && \
     rm -rf /var/lib/apt/lists/* && \
     find /opt/hermes/.venv -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null; \
@@ -103,9 +248,3 @@ RUN apt-get update && \
     find /usr/lib -path '*/dri/*' -name '*_video.so' -delete 2>/dev/null; \
     find /usr/lib -path '*/gallium-pipe/*' -delete 2>/dev/null; \
     true
-
-ENV HERMES_WEB_DIST=/opt/hermes/hermes_cli/web_dist
-ENV HERMES_HOME=/opt/data
-VOLUME [ "/opt/data" ]
-
-ENTRYPOINT [ "/usr/bin/tini", "-g", "--", "/opt/hermes/docker/entrypoint.sh" ]
