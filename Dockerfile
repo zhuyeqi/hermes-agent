@@ -53,7 +53,10 @@ RUN npm install --prefer-offline --no-audit && \
     npx playwright install --with-deps chromium --only-shell && \
     (cd web && npm install --prefer-offline --no-audit) && \
     (cd ui-tui && npm install --prefer-offline --no-audit) && \
-    npm cache clean --force
+    npm cache clean --force && \
+    chmod -R a+rX /opt/hermes/node_modules /opt/hermes/web/node_modules \
+                  /opt/hermes/ui-tui/node_modules /usr/local/lib/node_modules \
+                  /opt/hermes/.playwright
 
 # ---------- Source code ----------
 # .dockerignore excludes node_modules, so the installs above survive.
@@ -61,19 +64,13 @@ COPY --chown=hermes:hermes . .
 
 # Build browser dashboard and terminal UI assets.
 RUN cd web && npm run build && \
-    cd ../ui-tui && npm run build
-
-# ---------- Permissions ----------
-# Make install dir world-readable so any HERMES_UID can read it at runtime.
-# The venv needs to be traversable too.
-USER root
-RUN chmod -R a+rX /opt/hermes
-# Start as root so the entrypoint can usermod/groupmod + gosu.
-# If HERMES_UID is unset, the entrypoint drops to the default hermes user (10000).
+    cd ../ui-tui && npm run build && \
+    chmod -R a+rX /opt/hermes/hermes_cli/web_dist /opt/hermes/ui-tui/dist
 
 # ---------- Python virtualenv ----------
 RUN uv venv && \
-    uv pip install --no-cache-dir -e ".[all]"
+    uv pip install --no-cache-dir -e ".[all]" && \
+    chmod -R a+rX /opt/hermes/.venv
 
 # ---------- Runtime ----------
 ENV HERMES_WEB_DIST=/opt/hermes/hermes_cli/web_dist

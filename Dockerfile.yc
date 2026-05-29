@@ -47,13 +47,16 @@ RUN npm ci --prefer-offline --no-audit && \
     npm install -g --prefer-offline --no-audit agent-browser && \
     (cd web && npm ci --prefer-offline --no-audit) && \
     (cd ui-tui && npm ci --prefer-offline --no-audit) && \
-    npm cache clean --force
+    npm cache clean --force && \
+    chmod -R a+rX /opt/hermes/node_modules /opt/hermes/web/node_modules \
+                  /opt/hermes/ui-tui/node_modules /usr/local/lib/node_modules
 
 # ---------- Source code ----------
 COPY --chown=hermes:hermes . .
 
 RUN cd web && npm run build && \
-    cd ../ui-tui && npm run build
+    cd ../ui-tui && npm run build && \
+    chmod -R a+rX /opt/hermes/hermes_cli/web_dist /opt/hermes/ui-tui/dist
 
 # ---------- Python virtualenv ----------
 # Use Aliyun mirror for faster downloads in China, with PyPI as fallback.
@@ -63,7 +66,8 @@ ENV VIRTUAL_ENV=/opt/hermes/.venv
 ENV PYTHONNOUSERSITE=1
 ENV PATH="${VIRTUAL_ENV}/bin:/opt/hermes/node_modules/.bin:/opt/data/.local/bin:${PATH}"
 RUN uv venv "${VIRTUAL_ENV}" && \
-    uv pip install --no-cache-dir -e ".[yc]"
+    uv pip install --no-cache-dir -e ".[yc]" && \
+    chmod -R a+rX "${VIRTUAL_ENV}"
 
 # ---------- Webwright browser agent skill ----------
 # Use a local checkout from docker/webwright/ when present; otherwise clone.
@@ -78,7 +82,8 @@ RUN if [ -f /tmp/webwright-local/pyproject.toml ]; then \
     fi && \
     uv pip install --python "${VIRTUAL_ENV}/bin/python" --no-cache-dir /opt/webwright "playwright==1.60.0" && \
     "${VIRTUAL_ENV}/bin/python" -m playwright install chromium firefox && \
-    rm -rf /opt/webwright/.git
+    rm -rf /opt/webwright/.git && \
+    chmod -R a+rX /opt/hermes/.playwright /opt/webwright
 
 # Point agent-browser to the Playwright-installed Chromium (dynamic path for runtime).
 RUN _BROWSER=$(find /opt/hermes/.playwright -name chrome -type f | head -1) && \
@@ -98,10 +103,6 @@ RUN apt-get update && \
     find /usr/lib -path '*/dri/*' -name '*_video.so' -delete 2>/dev/null; \
     find /usr/lib -path '*/gallium-pipe/*' -delete 2>/dev/null; \
     true
-
-# ---------- Permissions ----------
-# Must run AFTER venv creation so .venv/ is also world-readable.
-RUN chmod -R a+rX /opt/hermes
 
 ENV HERMES_WEB_DIST=/opt/hermes/hermes_cli/web_dist
 ENV HERMES_HOME=/opt/data
