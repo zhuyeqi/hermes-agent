@@ -1108,8 +1108,8 @@ class HindsightMemoryProvider(MemoryProvider):
 
         self._config = _load_config()
         self._platform = str(kwargs.get("platform") or "").strip()
-        self._user_id = str(kwargs.get("user_id") or "").strip()
-        self._user_name = str(kwargs.get("user_name") or "").strip()
+        self._user_id = str(kwargs.get("user_id") or os.environ.get("HINDSIGHT_USER_ID") or "").strip()
+        self._user_name = str(kwargs.get("user_name") or os.environ.get("HINDSIGHT_USER_NAME") or "").strip()
         self._chat_id = str(kwargs.get("chat_id") or "").strip()
         self._chat_name = str(kwargs.get("chat_name") or "").strip()
         self._chat_type = str(kwargs.get("chat_type") or "").strip()

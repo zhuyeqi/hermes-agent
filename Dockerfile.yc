@@ -110,7 +110,7 @@ RUN touch ./README.md
 ENV UV_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 ENV UV_EXTRA_INDEX_URL=https://pypi.org/simple/
 
-RUN uv sync --frozen --no-install-project --extra all --extra messaging --extra anthropic --extra bedrock --extra azure-identity --extra yc
+RUN uv sync --frozen --no-install-project --extra all --extra messaging --extra anthropic --extra bedrock --extra azure-identity --extra yc --extra hindsight
 
 # ---------- Source code ----------
 COPY --chown=hermes:hermes . .
