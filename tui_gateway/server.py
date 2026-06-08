@@ -117,6 +117,17 @@ from tui_gateway.render import make_stream_renderer, render_diff, render_message
 
 _sessions: dict[str, dict] = {}
 _methods: dict[str, callable] = {}
+
+
+def _use_persistent_session_ids() -> bool:
+    """When true, use the persistent SessionDB key as the _sessions dict key.
+
+    Eliminates the need for ephemeral↔persistent ID mapping in callers
+    (yunyi BFF).  Opt-in via HERMES_GATEWAY_PERSISTENT_SESSION_IDS env var.
+    """
+    return os.environ.get("HERMES_GATEWAY_PERSISTENT_SESSION_IDS", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
 _pending: dict[str, tuple[str, threading.Event]] = {}
 _pending_prompt_payloads: dict[str, tuple[str, dict]] = {}
 _answers: dict[str, str] = {}
@@ -360,6 +371,11 @@ def _get_db():
 def _db_unavailable_error(rid, *, code: int):
     detail = _db_error or "state.db unavailable"
     return _err(rid, code, f"state.db unavailable: {detail}")
+
+
+def _pin_session_transport(session: dict) -> None:
+    """Route async gateway events to the caller's transport (live WS client)."""
+    session["transport"] = current_transport() or _stdio_transport
 
 
 def write_json(obj: dict) -> bool:
@@ -2293,8 +2309,13 @@ def _inflight_snapshot(session: dict) -> dict | None:
 
 @method("session.create")
 def _(rid, params: dict) -> dict:
-    sid = uuid.uuid4().hex[:8]
     key = _new_session_key()
+    # When HERMES_GATEWAY_PERSISTENT_SESSION_IDS is enabled, use the
+    # persistent SessionDB key as the _sessions dict key so callers (yunyi
+    # BFF) can use a single stable ID everywhere — no ephemeral↔persistent
+    # mapping needed.
+    _persistent_ids = _use_persistent_session_ids()
+    sid = key if _persistent_ids else uuid.uuid4().hex[:8]
     cols = int(params.get("cols", 80))
     _enable_gateway_prompts()
 
@@ -2342,6 +2363,7 @@ def _(rid, params: dict) -> dict:
         rid,
         {
             "session_id": sid,
+            "session_key": key if not _persistent_ids else None,
             "info": {
                 "model": _resolve_model(),
                 "tools": {},
@@ -2459,7 +2481,28 @@ def _(rid, params: dict) -> dict:
             target = found["id"]
         else:
             return _err(rid, 4007, "session not found")
-    sid = uuid.uuid4().hex[:8]
+
+    # Persistent-ID mode: reuse target as the _sessions dict key.
+    # If the session is already loaded in memory, return it immediately
+    # (idempotent — no agent rebuild needed for cached sessions).
+    _persistent_ids = _use_persistent_session_ids()
+    if _persistent_ids:
+        existing = _sessions.get(target)
+        if existing is not None:
+            _pin_session_transport(existing)
+            with existing["history_lock"]:
+                history = list(existing.get("display_history") or existing.get("history") or [])
+            agent = existing.get("agent")
+            return _ok(rid, {
+                "session_id": target,
+                "resumed": target,
+                "cached": True,
+                "message_count": len(history),
+                "messages": _history_to_messages(history),
+                "info": _session_info(agent) if agent else _fallback_session_info(existing),
+            })
+
+    sid = target if _persistent_ids else uuid.uuid4().hex[:8]
     _enable_gateway_prompts()
     try:
         db.reopen_session(target)
@@ -2598,6 +2641,7 @@ def _(rid, params: dict) -> dict:
     if err:
         return err
 
+    _pin_session_transport(session)
     with session["history_lock"]:
         session["last_active"] = time.time()
         history = list(session.get("display_history") or session.get("history") or [])
@@ -2620,6 +2664,32 @@ def _(rid, params: dict) -> dict:
         rid,
         payload,
     )
+
+
+@method("session.pending_prompt")
+def _(rid, params: dict) -> dict:
+    """Return the active pending prompt (approval/clarify/sudo/secret) for a session.
+
+    Used by yunyi BFF on browser WebSocket reconnect to restore prompt UI
+    state without maintaining its own snapshot buffer.  Returns ``null`` if
+    no prompt is pending.
+    """
+    sid = str(params.get("session_id") or "")
+    session = _sessions.get(sid)
+    if not session:
+        return _err(rid, 4001, "session not found")
+    # Scan _pending for an entry owned by this session.
+    for req_id, (owner_sid, _ev) in list(_pending.items()):
+        if owner_sid != sid:
+            continue
+        event_type, payload = _pending_prompt_payloads.get(req_id, (None, {}))
+        if event_type and payload:
+            return _ok(rid, {
+                "request_id": req_id,
+                "type": event_type,
+                "payload": payload,
+            })
+    return _ok(rid, None)
 
 
 @method("session.delete")
@@ -3037,7 +3107,7 @@ def _(rid, params: dict) -> dict:
         db.set_session_title(new_key, title)
     except Exception as e:
         return _err(rid, 5008, f"branch failed: {e}")
-    new_sid = uuid.uuid4().hex[:8]
+    new_sid = new_key if _use_persistent_session_ids() else uuid.uuid4().hex[:8]
     try:
         tokens = _set_session_context(new_key)
         try:

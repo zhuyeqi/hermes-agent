@@ -130,6 +130,16 @@ async def handle_ws(ws: Any) -> None:
         }
     )
 
+    # Auto-repin: claim all sessions that aren't already on this connection.
+    # Covers three cases:
+    #  1. Old WS died → finally reset to _stdio_transport (common path)
+    #  2. Old WS transport closed but finally hasn't run yet (race window)
+    #  3. Old WS transport still looks alive but belongs to a dead connection
+    #     (new WS connects before old handle_ws finally executes)
+    for _, sess in list(server._sessions.items()):
+        if sess.get("transport") is not transport:
+            sess["transport"] = transport
+
     try:
         while True:
             try:

@@ -1,0 +1,5 @@
+#!/command/with-contenv sh
+# shellcheck shell=sh
+# Called when the tui-gateway-ws service exits.  s6 will restart it
+# automatically (longrun); this hook is for optional cleanup.
+exec true

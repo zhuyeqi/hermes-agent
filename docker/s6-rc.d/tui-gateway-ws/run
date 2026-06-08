@@ -1,0 +1,23 @@
+#!/command/with-contenv sh
+# shellcheck shell=sh
+# s6 longrun service: tui_gateway WebSocket server.
+#
+# Started when HERMES_GATEWAY_WS_PORT is set (non-empty).  Runs a
+# persistent tui_gateway process that accepts WebSocket connections from
+# the yunyi BFF over the Docker network, replacing per-session
+# ``docker exec`` invocations.
+#
+# Opt-in: if the env var is unset or empty this service exits
+# immediately so existing Ink TUI deployments are unaffected.
+
+WS_PORT="${HERMES_GATEWAY_WS_PORT:-}"
+if [ -z "$WS_PORT" ]; then
+    # Nothing to do — sleep so s6 considers the service "up" without
+    # restarting it in a tight loop.
+    exec sleep infinity
+fi
+
+# s6-setuidgid drops from root to the hermes user when the container
+# runs as root (the default).
+exec s6-setuidgid hermes \
+    /opt/hermes/.venv/bin/python -m tui_gateway.ws_entry
