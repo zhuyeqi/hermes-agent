@@ -1,5 +1,5 @@
 #
-# docker-compose.yc.yml — slim image + rootless-safe entrypoint.
+# docker-compose.yc.yml — yc-specific compose for hermes-agent.
 #
 # Targets remote hosts where Docker is started by an unprivileged user
 # (rootless Docker).  The bind mount on ${HOME}/.hermes is written by the
@@ -15,6 +15,18 @@
 # They are ignored in rootless mode (the container "root" already maps to
 # the host user, so chown will succeed harmlessly or fail-safe).
 #
+# Security notes:
+#   - API_SERVER_HOST is set to 0.0.0.0 because yunyi BFF connects remotely.
+#     API_SERVER_KEY is mandatory for auth — change the default before deploy.
+#   - The dashboard is available via the gateway's s6-overlay supervised
+#     service (same image, same container) on port 9119.  No separate
+#     dashboard container is needed — it would race s6-log file locks
+#     under /opt/data/logs/ with the gateway's own loggers.
+#   - If you override entrypoint, keep `/init` as the first command in
+#     the chain.  `/init` is s6-overlay's PID 1 — it runs the cont-init.d
+#     scripts and sets up the supervision tree before any service starts.
+#     Bypassing it means the gateway will not work correctly.
+#
 services:
   gateway:
     platform: linux/amd64
@@ -27,34 +39,16 @@ services:
     network_mode: host
     shm_size: "2gb"
     volumes:
-      - ${HOME:-~}/.hermes:/home/hermes/.hermes
-      - hermes-agent-src:/opt/hermes
+      - ${HOME:-~}/.hermes:/opt/data
     environment:
-      HERMES_HOME: /opt/data
       HERMES_UID: ${HERMES_UID:-1000}
       HERMES_GID: ${HERMES_GID:-1000}
       API_SERVER_HOST: 0.0.0.0
       API_SERVER_KEY: ${API_SERVER_KEY:-hermes-open-webui-secret}
+      HERMES_DASHBOARD: ${HERMES_DASHBOARD:-true}
+      HERMES_DASHBOARD_HOST: ${HERMES_DASHBOARD_HOST:-127.0.0.1}
+      HERMES_DASHBOARD_PORT: ${HERMES_DASHBOARD_PORT:-9119}
       DISPLAY: ${HERMES_AGENT_DISPLAY:-:99}
       HERMES_XVFB_RESOLUTION: ${HERMES_XVFB_RESOLUTION:-1920x1080x24}
       PLAYWRIGHT_BROWSERS_PATH: /opt/hermes/.playwright
     command: ["gateway", "run"]
-
-  dashboard:
-    platform: linux/amd64
-    image: hermes-agent-yc
-    container_name: hermes-dashboard
-    restart: unless-stopped
-    network_mode: host
-    depends_on:
-      - gateway
-    volumes:
-      - ${HOME:-~}/.hermes:/home/hermes/.hermes
-    environment:
-      HERMES_HOME: /opt/data
-      HERMES_UID: ${HERMES_UID:-1000}
-      HERMES_GID: ${HERMES_GID:-1000}
-    command: ["dashboard", "--host", "127.0.0.1", "--no-open"]
-
-volumes:
-  hermes-agent-src:
