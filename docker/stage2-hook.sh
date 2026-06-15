@@ -417,6 +417,23 @@ if [ -d "$INSTALL_DIR/skills" ]; then
         || echo "[stage2] Warning: skills_sync.py failed; continuing"
 fi
 
+# --- Webwright skill symlink (yc / Webwright-enabled images) ---
+# Microsoft Webwright ships skills/webwright/SKILL.md in the repo cloned to
+# /opt/webwright at image build time (Dockerfile.yc). Hermes discovers skills
+# only under $HERMES_HOME/skills/, so wire the upstream skill in via symlink.
+# Skip when the checkout is absent (standard images) or the user replaced the
+# slot with a real directory.
+WEBWRIGHT_SKILL_SRC="/opt/webwright/skills/webwright"
+if [ -f "$WEBWRIGHT_SKILL_SRC/SKILL.md" ]; then
+    webwright_skill_dest="$HERMES_HOME/skills/webwright"
+    if [ -e "$webwright_skill_dest" ] && [ ! -L "$webwright_skill_dest" ]; then
+        echo "[stage2] webwright skill: $webwright_skill_dest exists (not a symlink); skipping"
+    else
+        as_hermes ln -sfn "$WEBWRIGHT_SKILL_SRC" "$webwright_skill_dest"
+        echo "[stage2] Linked webwright skill: $webwright_skill_dest -> $WEBWRIGHT_SKILL_SRC"
+    fi
+fi
+
 # --- Discover agent-browser's Chromium binary ---
 # The image's Dockerfile runs `npx playwright install chromium`, which
 # populates ``$PLAYWRIGHT_BROWSERS_PATH`` (=/opt/hermes/.playwright) with
