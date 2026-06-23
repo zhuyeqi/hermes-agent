@@ -19,5 +19,14 @@ fi
 
 # s6-setuidgid drops from root to the hermes user when the container
 # runs as root (the default).
+#
+# cd to the yunyi workspace before starting. Without this the process
+# inherits the s6 servicedir as cwd, and so do all agent tool subprocesses
+# (webwright etc.); agents then can't use relative paths meaningfully and
+# fall back to $HOME/workspace — landing artifacts outside the workspace
+# yunyi exposes in the UI. TERMINAL_CWD is already set to the workspace
+# by yunyi (apps/server/server/agent/profile.py).
+cd "${TERMINAL_CWD:-${HERMES_HOME:-/opt/data}/workspace}" 2>/dev/null \
+    || cd "${HERMES_HOME:-/opt/data}"
 exec s6-setuidgid hermes \
     /opt/hermes/.venv/bin/python -m tui_gateway.ws_entry
