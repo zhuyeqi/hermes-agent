@@ -465,4 +465,26 @@ if [ -z "${AGENT_BROWSER_EXECUTABLE_PATH:-}" ] && \
     fi
 fi
 
+# --- Make Playwright browsers resolvable on the default cache path ---
+# Browsers live at $PLAYWRIGHT_BROWSERS_PATH (/opt/hermes/.playwright). A
+# Playwright call that doesn't inherit that env var falls back to
+# ~/.cache/ms-playwright and fails with "Executable doesn't exist ...
+# please run `playwright install`", which agents relay to users as
+# "browser not installed" (e.g. webwright's preinstalled Firefox).
+# Symlink the default path so browsers resolve with or without the env.
+#
+# The agent subprocess HOME is $HERMES_HOME/home (= /opt/data/home), so
+# THAT is the path Playwright inspects — not /root (root is docker-exec's
+# default HOME, not the agent's). Cover both: agent HOME is the
+# load-bearing one; /root is a fallback for bootstrap/root shells.
+# Idempotent (`ln -sfn`) and best-effort (`|| true`); never abort cont-init.
+if [ -n "${PLAYWRIGHT_BROWSERS_PATH:-}" ] && [ -d "${PLAYWRIGHT_BROWSERS_PATH}" ]; then
+    # Agent subprocess HOME — create as hermes so agent shells can traverse it.
+    as_hermes mkdir -p "$HERMES_HOME/home/.cache" 2>/dev/null || true
+    as_hermes ln -sfn "$PLAYWRIGHT_BROWSERS_PATH" "$HERMES_HOME/home/.cache/ms-playwright" 2>/dev/null || true
+    # Root HOME — hermes cannot write under /root.
+    mkdir -p /root/.cache 2>/dev/null || true
+    ln -sfn "$PLAYWRIGHT_BROWSERS_PATH" /root/.cache/ms-playwright 2>/dev/null || true
+fi
+
 echo "[stage2] Setup complete; starting user services"
